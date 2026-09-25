@@ -51,6 +51,12 @@ output and describe what to look for instead of guessing.
   (confirmed on the device: with it unset, dark text rendered greenish). The flag only matters while
   LVGL is in the project; afterwards the panel still wants the two bytes of each pixel swapped, and
   that is ours to handle in our own framebuffer.
+- **Raw `LCD::drawBitmap()` pixels must be byte-swapped RGB565** (confirmed on the device: `0xF800`
+  stored as-is shows blue, `__builtin_bswap16(0xF800)` shows red). Keep that swap in one colour helper
+  so it is never written by hand. The panel also keeps its own copy of the picture across a reboot, so
+  only changed rectangles need sending, and startup should push one full clear frame. Pass
+  `timeout_ms = -1` to `drawBitmap` unless the buffer is known to stay untouched until the DMA transfer
+  ends.
 - **LVGL is not thread-safe.** Any LVGL call outside the port's own task needs
   `lvgl_port_lock(-1)` / `lvgl_port_unlock()` (see `src/main.cpp`).
 - **Config headers in `src/`** (`lv_conf.h`, `esp_panel_*_conf.h`, `esp_utils_conf.h`) come from the
@@ -118,4 +124,10 @@ screen or in the serial output. Claude can only vouch for the first half, so say
 - Don't assert numbers (buffer sizes, timings, pin choices) as if reasoned. Say when a value is
   arbitrary, and say how to measure the right one.
 - Comments and docs in plain, full-sentence English that say what the code *is*, not what it used to be.
+- The owner is not a C++ expert. Write code with explicit types instead of `auto`, and explain any
+  C++ feature (casts, templates, lambdas, macros) the first time it appears, including whether it can
+  allocate memory. Prefer static or global storage. The only dynamic allocation planned is the PSRAM
+  framebuffer, made once at startup and never freed. Exported sprite data is `const` and lives in
+  flash; copy it into the RAM framebuffer with our own code rather than handing flash addresses to the
+  display's DMA.
 - Task tracking lives in `docs/feature-backlog.md` (DrBacklog), not in this file.
