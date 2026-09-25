@@ -41,6 +41,12 @@ output and describe what to look for instead of guessing.
   not `ESP32_Display_Panel`). It lists I2C on GPIO 10 (SCL) and 11 (SDA), the TCA9554 IO expander at
   `0x20`, touch at `0x53` with interrupt on GPIO 4, and QSPI display pins 21 (CS), 40 (SCK) and
   46/45/42/41 (data). Re-check against the wiki before relying on a pin.
+- **`Serial` goes over USB.** `boards/BOARD_CUSTOM.json` was copied from Espressif's EV board (its
+  `name` and `url` fields are leftovers). It sets `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial` reaches the
+  USB-C monitor; with `0`, `Serial` went to unconnected UART pins while the library's own logs still
+  appeared. The USB port drops and reappears on every reset, so `setup()` starts with a 2 s `delay`
+  (an arbitrary value; raise it if early lines are missed). PSRAM allocation of the 412x412
+  framebuffer is confirmed working on the device.
 - **The platform is a third-party pioarduino build, pinned with Arduino core 3.1.1.** The official
   `espressif32` platform did not support Arduino 3.1.x when this was set up. Don't "fix" it back to the official platform.
 - **`framework-arduinoespressif32-libs` is the `-h` (high performance) build** on purpose: it avoids
