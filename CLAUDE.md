@@ -44,8 +44,8 @@ output and describe what to look for instead of guessing.
 - **`Serial` goes over USB.** `boards/BOARD_CUSTOM.json` was copied from Espressif's EV board (its
   `name` and `url` fields are leftovers). It sets `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial` reaches the
   USB-C monitor; with `0`, `Serial` went to unconnected UART pins while the library's own logs still
-  appeared. The USB port drops and reappears on every reset, so `setup()` starts with a 2 s `delay`
-  (an arbitrary value; raise it if early lines are missed). PSRAM allocation of the 412x412
+  appeared. The USB port drops and reappears on every reset, so `setup()` starts with a 5 s `delay`
+  (an arbitrary value; 2 s was too short on the owner's machine; raise it if early lines are missed). PSRAM allocation of the 412x412
   framebuffer is confirmed working on the device.
 - **The platform is a third-party pioarduino build, pinned with Arduino core 3.1.1.** The official
   `espressif32` platform did not support Arduino 3.1.x when this was set up. Don't "fix" it back to the official platform.
@@ -60,7 +60,9 @@ output and describe what to look for instead of guessing.
 - **Raw `LCD::drawBitmap()` pixels must be byte-swapped RGB565** (confirmed on the device: `0xF800`
   stored as-is shows blue, `__builtin_bswap16(0xF800)` shows red). Keep that swap in one colour helper
   so it is never written by hand. The panel also keeps its own copy of the picture across a reboot, so
-  only changed rectangles need sending, and startup should push one full clear frame. Pass
+  only changed rectangles need sending, and startup should push one full clear frame. Measured: a
+  full 412x412 frame sent from the PSRAM buffer in 40-row strips takes about 31 ms (about 11 MB/s)
+  with no DMA errors, so send only changed rectangles rather than the whole frame every time. Pass
   `timeout_ms = -1` to `drawBitmap` unless the buffer is known to stay untouched until the DMA transfer
   ends.
 - **LVGL is not thread-safe.** Any LVGL call outside the port's own task needs
