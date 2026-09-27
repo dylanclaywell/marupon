@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <esp_display_panel.hpp>
 
+#include <sprites/sprite_baby.h>
+
 using namespace esp_panel::board;
 
 static constexpr int SQ = 100;
@@ -63,6 +65,23 @@ static void fillRect(int x, int y, int w, int h, uint16_t color)
     }
 }
 
+static void drawSprite(int x, int y, int h, int w, const uint16_t *data)
+{
+    for (int row = 0; row < h; row++)
+    {
+        for (int col = 0; col < w; col++)
+        {
+            uint16_t color = data[row * w + col];
+
+            // Skip magenta pixels
+            if (color == 0x1FF8)
+                continue;
+
+            setPixel(x + col, y + row, data[row * w + col]);
+        }
+    }
+}
+
 // Draws a test image: a dark blue background, a white square outline, and a coloured marker in each
 // corner of the outline so a mirrored or rotated image is easy to spot.
 static void drawTestPattern()
@@ -84,9 +103,11 @@ static void drawTestPattern()
     fillRect(inset + size - 40, inset + 10, 30, 30, panelColor(0, 255, 0));          // top right: green
     fillRect(inset + 10, inset + size - 40, 30, 30, panelColor(0, 0, 255));          // bottom left: blue
     fillRect(inset + size - 40, inset + size - 40, 30, 30, panelColor(255, 255, 0)); // bottom right: yellow
+
+    drawSprite(FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2, FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2, SPRITE_BABY_HEIGHT, SPRITE_BABY_WIDTH, sprite_baby_data);
 }
 
-static constexpr int STRIP_ROWS = 40; // An arbitrary strip height; we can measure other sizes.
+static constexpr int STRIP_ROWS = FB_HEIGHT / 10; // An arbitrary strip height; we can measure other sizes.
 
 // Sends the whole framebuffer to the panel in horizontal strips. Returns false if any strip failed.
 static bool flushFramebuffer(esp_panel::drivers::LCD *lcd)
