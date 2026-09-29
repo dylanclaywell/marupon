@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-25. This file records where the project stands and what comes next. Task
+Last updated: 2026-09-28. This file records where the project stands and what comes next. Task
 tracking proper lives in `docs/feature-backlog.md` (DrBacklog), which is still empty; the "Next"
 list below is the seed for it.
 
@@ -31,28 +31,43 @@ Everything below was confirmed on the device by the owner, unless marked otherwi
   buffer and no mirror or swap flags are needed.
 - **Serial works** over USB (`ARDUINO_USB_CDC_ON_BOOT=1` in `boards/BOARD_CUSTOM.json`). The port
   resets on every reboot, so `setup()` waits 5 s before printing.
+- **Sprite blit and transparency work.** `drawSprite()` copies a `const uint16_t` sprite array into
+  the framebuffer, skipping pixels equal to the magenta colour key `0x1FF8`. Verified visually on the
+  device with `sprite_baby.h`.
+- **Simulated input works end-to-end, with no physical buttons wired up.** `tools/simulate_input/` is
+  a local Python tool (an `http.server` app plus a small HTML/JS page) that lets UP/DOWN/A/B "buttons"
+  be pressed from the laptop keyboard or on-screen and forwarded over USB serial as text lines
+  (`BUTTON <NAME> PRESSED`/`BUTTON <NAME> RELEASED`). `main.cpp`'s `loop()` reads `Serial`
+  non-blockingly into a fixed `char` line buffer, parses completed lines with `sscanf`, and updates a
+  `buttonStates[]` array. UP/DOWN currently just nudge the sprite's Y position by one pixel per frame
+  as a smoke test — no real pet behaviour is designed yet.
+- **The sprite move-test doesn't erase behind itself yet.** Each `loop()` call draws the sprite at its
+  current `spriteX`/`spriteY` without clearing the previous position first, so holding UP/DOWN
+  currently leaves a trail on screen. Expected: dirty-rectangle drawing (see Next) hasn't been built.
 
-`main.cpp` currently draws the test pattern once, then re-sends the whole frame every second and
-prints how long it took. That loop is a measurement, not the final design.
+`main.cpp` currently draws the test pattern once, then repeatedly sends the whole frame, reads any
+pending button input, and nudges the sprite. That loop is a measurement and a smoke test, not the
+final design.
 
 All work is committed on `main`. Nothing has been pushed, and there is no remote yet.
 
 ## Next
 
-1. **Sprite blit.** Make a tiny hand-written sprite as a `const uint16_t` array (that is how exported
-   sprites will arrive), copy it into the framebuffer with our own loop, and check that it appears
-   where expected. Decide whether sprite data is stored already byte-swapped or swapped when blitting.
-2. **Transparency.** Pick a "transparent" colour key, skip those pixels in the blit, and test it over
-   the test pattern's background.
-3. **Send only the changed rectangle** (`flushRect(x, y, w, h)`), and measure how long a small
-   rectangle takes compared with the 31 ms full frame. Keep x, y, width and height multiples of 4
-   until we know whether the panel needs that.
-4. **Startup clear.** Push one full clear frame at boot, because the panel keeps its old picture
+1. **Clean up and organize the input-handling code in `main.cpp`.** The line-buffer reading, `sscanf`
+   parsing and `buttonStates[]` updates in `loop()` were built incrementally and work, but landed as
+   one long block; give them structure before building more on top.
+2. **Dirty-rectangle drawing.** Decide how sprite movement tracks and redraws only the changed area,
+   instead of leaving a trail behind the sprite every frame. This folds in the old `flushRect(x, y, w,
+   h)` idea: measure how long a small rectangle takes to send compared with the 31 ms full frame, and
+   keep x, y, width and height multiples of 4 until we know whether the panel needs that.
+3. **Startup clear.** Push one full clear frame at boot, because the panel keeps its old picture
    across reboots.
-5. **Touch.** Currently switched off (`ESP_PANEL_BOARD_USE_TOUCH (0)`). See the unverified values
-   below.
-6. **The pet itself:** states, animation timing, and what touch does. Nothing is designed yet.
-7. **Remove LVGL** once nothing needs it: `lvgl` in `lib_deps`, the LVGL flags in `platformio.ini`,
+4. **The pet itself:** states, animation timing, and what button input does. Nothing beyond nudging
+   the sprite up/down as a smoke test is designed yet.
+5. **Touch.** Still switched off (`ESP_PANEL_BOARD_USE_TOUCH (0)`) and now lower priority: the current
+   input model is the named buttons (UP/DOWN/A/B) above, simulated from the laptop over serial rather
+   than real touch coordinates. See the unverified values below if touch gets picked back up later.
+6. **Remove LVGL** once nothing needs it: `lvgl` in `lib_deps`, the LVGL flags in `platformio.ini`,
    `src/lv_conf.h`, `src/lvgl_v8_port.cpp` and `src/lvgl_v8_port.h`.
 
 ## Cleanup, when convenient
@@ -87,5 +102,7 @@ All work is committed on `main`. Nothing has been pushed, and there is no remote
   monitor.
 - Read `CLAUDE.md` first. Key rules: propose changes and wait for a yes, never flash or open the
   monitor, ask "OK to commit?" for every commit, never push.
+- Simulated input (no physical buttons needed): `uv run tools/simulate_input/simulate_input.py`, then
+  open `http://localhost:8000` in a browser. Arrow keys move UP/DOWN, `j`/`k` are A/B.
 - Values not yet measured (frame times with partial rectangles, PSRAM headroom under a real workload)
   should be measured on the device, not assumed.

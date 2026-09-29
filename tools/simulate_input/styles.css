@@ -1,0 +1,32 @@
+.input__container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.input__vertical-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.input__horizontal-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input__button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 4rem;
+  height: 4rem;
+  font-family: "Arial", sans-serif;
+  text-transform: uppercase;
+  border: 1px solid #eee;
+  border-radius: 0.25rem;
+}
+
+.input__button--pressed {
+  background-color: #00b206;
+}
