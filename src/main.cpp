@@ -15,8 +15,6 @@ static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
 
 static constexpr int FB_WIDTH = 412;
 static constexpr int FB_HEIGHT = 412;
-static uint16_t *framebuffer = nullptr; // Points into PSRAM once framebufferInit() has run.
-static esp_panel::drivers::LCD *lcd = nullptr;
 
 static constexpr uint16_t background = panelColor(0, 0, 64);
 
@@ -57,18 +55,6 @@ public:
     }
 };
 
-static NullableRect dirtyRect;
-
-// Sets one pixel in the framebuffer. Pixels outside the buffer are ignored.
-static inline void setPixel(int x, int y, uint16_t color)
-{
-    if (x < 0 || x >= FB_WIDTH || y < 0 || y >= FB_HEIGHT)
-    {
-        return;
-    }
-    framebuffer[y * FB_WIDTH + x] = color;
-}
-
 static NullableRect rectUnion(const NullableRect &a, const NullableRect &b)
 {
     Rect aRect = a.getRect();
@@ -90,73 +76,13 @@ static NullableRect rectUnion(const NullableRect &a, const NullableRect &b)
     return NullableRect(Rect{left, top, right - left, bottom - top});
 }
 
-static NullableRect rectIntersect(const NullableRect &a, const NullableRect &b)
+static NullableRect rectIntersect(const Rect &a, const Rect &b)
 {
-    Rect aRect = a.getRect();
-    Rect bRect = b.getRect();
-
-    int left = max(aRect.x, bRect.x);
-    int top = max(aRect.y, bRect.y);
-    int right = min(aRect.x + aRect.w, bRect.x + bRect.w);
-    int bottom = min(aRect.y + aRect.h, bRect.y + bRect.h);
+    int left = max(a.x, b.x);
+    int top = max(a.y, b.y);
+    int right = min(a.x + a.w, b.x + b.w);
+    int bottom = min(a.y + a.h, b.y + b.h);
     return NullableRect(Rect{left, top, right - left, bottom - top});
-}
-
-static void fillRectClipped(const NullableRect &region, uint16_t color)
-{
-    if (region.isEmpty())
-    {
-        return;
-    }
-
-    Rect rect = region.getRect();
-    for (int row = rect.y; row < rect.y + rect.h; row++)
-    {
-        for (int col = rect.x; col < rect.x + rect.w; col++)
-        {
-            setPixel(col, row, color);
-        }
-    }
-}
-
-static void drawSpriteClipped(int x, int y, int w, int h, const uint16_t *data, const NullableRect &region)
-{
-    NullableRect visible = rectIntersect(NullableRect(Rect{x, y, w, h}), region);
-    if (visible.isEmpty())
-    {
-        return;
-    }
-    Rect visibleRect = visible.getRect();
-    for (int row = visibleRect.y; row < visibleRect.y + visibleRect.h; row++)
-    {
-        for (int col = visibleRect.x; col < visibleRect.x + visibleRect.w; col++)
-        {
-            uint16_t color = data[(row - y) * w + (col - x)];
-            if (color != TRANSPARENT_COLOR)
-            {
-                setPixel(col, row, color);
-            }
-        }
-    }
-}
-
-static void markDirty(const Rect &r)
-{
-    if (dirtyRect.isEmpty())
-    {
-        dirtyRect = NullableRect(r);
-    }
-    else
-    {
-        dirtyRect = rectUnion(dirtyRect, NullableRect(r));
-    }
-}
-
-static void renderRegion(const NullableRect &region)
-{
-
-    fillRectClipped(region, background);
-    drawSpriteClipped(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, region);
 }
 
 enum ButtonState
@@ -194,64 +120,7 @@ static constexpr int LINE_BUFFER_SIZE = 32;
 static char lineBuffer[LINE_BUFFER_SIZE];
 static int lineLength = 0;
 
-// Allocates the framebuffer in PSRAM. Called once at startup and never freed.
-// Returns false if there was not enough PSRAM.
-static bool framebufferInit()
-{
-    size_t bytes = FB_WIDTH * FB_HEIGHT * sizeof(uint16_t);
-    framebuffer = static_cast<uint16_t *>(ps_malloc(bytes));
-    return framebuffer != nullptr;
-}
-
-// Fills a rectangle in the framebuffer. Parts outside the buffer are skipped.
-static void fillRect(int x, int y, int w, int h, uint16_t color)
-{
-    for (int row = y; row < y + h; row++)
-    {
-        for (int col = x; col < x + w; col++)
-        {
-            setPixel(col, row, color);
-        }
-    }
-}
-
-static void drawSprite(int x, int y, int w, int h, const uint16_t *data)
-{
-    for (int row = 0; row < h; row++)
-    {
-        for (int col = 0; col < w; col++)
-        {
-            uint16_t color = data[row * w + col];
-
-            // Skip magenta pixels
-            if (color == TRANSPARENT_COLOR)
-                continue;
-
-            setPixel(x + col, y + row, color);
-        }
-    }
-}
-
 static constexpr int STRIP_ROWS = FB_HEIGHT / 10; // An arbitrary strip height; we can measure other sizes.
-
-// Sends the whole framebuffer to the panel in horizontal strips. Returns false if any strip failed.
-static bool flushFramebuffer()
-{
-    for (int y = 0; y < FB_HEIGHT; y += STRIP_ROWS)
-    {
-        int rows = FB_HEIGHT - y;
-        if (rows > STRIP_ROWS)
-        {
-            rows = STRIP_ROWS;
-        }
-        const uint8_t *data = reinterpret_cast<const uint8_t *>(&framebuffer[y * FB_WIDTH]);
-        if (!lcd->drawBitmap(0, y, FB_WIDTH, rows, data, -1))
-        {
-            return false;
-        }
-    }
-    return true;
-}
 
 static bool findButton(const char *name, ButtonName &out)
 {
@@ -266,6 +135,124 @@ static bool findButton(const char *name, ButtonName &out)
     return false;
 }
 
+class Framebuffer
+{
+private:
+    uint16_t *_pixels = nullptr; // in PSRAM, allocated once by init()
+    NullableRect _dirtyRect;     // the changes not yet sent to the panel
+    esp_panel::drivers::LCD *_lcd = nullptr;
+
+    void setPixel(int x, int y, uint16_t color)
+    {
+        if (x < 0 || x >= FB_WIDTH || y < 0 || y >= FB_HEIGHT)
+        {
+            return;
+        }
+        _pixels[y * FB_WIDTH + x] = color;
+    }
+
+public:
+    bool init(esp_panel::drivers::LCD *lcd)
+    {
+        _lcd = lcd;
+        size_t bytes = FB_WIDTH * FB_HEIGHT * sizeof(uint16_t);
+        _pixels = static_cast<uint16_t *>(ps_malloc(bytes));
+        return _pixels != nullptr;
+    }
+
+    void markDirty(const Rect &r)
+    {
+        _dirtyRect = rectUnion(_dirtyRect, NullableRect(r));
+    }
+
+    void fillRect(const Rect &r, uint16_t color)
+    {
+        NullableRect visible = rectIntersect(r, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+
+        if (visible.isEmpty())
+        {
+            return;
+        }
+
+        Rect visibleRect = visible.getRect();
+
+        for (int row = visibleRect.y; row < visibleRect.y + visibleRect.h; row++)
+        {
+            for (int col = visibleRect.x; col < visibleRect.x + visibleRect.w; col++)
+            {
+                setPixel(col, row, color);
+            }
+        }
+    }
+
+    void drawSprite(int x, int y, int w, int h, const uint16_t *data, const Rect &clip)
+    {
+        NullableRect visible = rectIntersect(Rect{x, y, w, h}, clip);
+
+        if (visible.isEmpty())
+        {
+            return;
+        }
+
+        Rect visibleRect = visible.getRect();
+        for (int row = visibleRect.y; row < visibleRect.y + visibleRect.h; row++)
+        {
+            for (int col = visibleRect.x; col < visibleRect.x + visibleRect.w; col++)
+            {
+                uint16_t color = data[(row - y) * w + (col - x)];
+                if (color != TRANSPARENT_COLOR)
+                {
+                    setPixel(col, row, color);
+                }
+            }
+        }
+    }
+
+    bool isDirty() const
+    {
+        return !_dirtyRect.isEmpty();
+    }
+
+    Rect getDirtyRect() const
+    {
+        return _dirtyRect.getRect();
+    }
+
+    bool flush()
+    {
+        if (_dirtyRect.isEmpty())
+        {
+            return true;
+        }
+
+        for (int y = 0; y < FB_HEIGHT; y += STRIP_ROWS)
+        {
+            int rows = FB_HEIGHT - y;
+            if (rows > STRIP_ROWS)
+            {
+                rows = STRIP_ROWS;
+            }
+            const uint8_t *data = reinterpret_cast<const uint8_t *>(&_pixels[y * FB_WIDTH]);
+            if (!_lcd->drawBitmap(0, y, FB_WIDTH, rows, data, -1))
+            {
+                return false;
+            }
+        }
+
+        _dirtyRect.clear();
+
+        return true;
+    }
+};
+
+static Framebuffer framebuffer;
+
+static void renderRegion(const Rect &region)
+{
+    framebuffer.fillRect(region, background);
+    framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, region);
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -276,13 +263,14 @@ void setup()
     bool ok = board->begin();
     assert(ok);
 
-    lcd = board->getLCD();
+    esp_panel::drivers::LCD *lcd = board->getLCD();
 
-    if (framebufferInit())
+    if (framebuffer.init(lcd))
     {
-        fillRect(0, 0, FB_WIDTH, FB_HEIGHT, background);
-
-        flushFramebuffer();
+        framebuffer.markDirty(Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        framebuffer.fillRect(Rect{0, 0, FB_WIDTH, FB_HEIGHT}, background);
+        framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        framebuffer.flush();
     }
     else
     {
@@ -292,8 +280,6 @@ void setup()
             delay(1000);
         }
     }
-
-    markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
 }
 
 void loop()
@@ -341,21 +327,20 @@ void loop()
 
     if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
     {
-        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
         spriteY--;
-        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
     }
     if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
     {
-        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
         spriteY++;
-        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
     }
 
-    if (!dirtyRect.isEmpty())
+    if (framebuffer.isDirty())
     {
-        renderRegion(dirtyRect);
-        flushFramebuffer();
-        dirtyRect.clear();
+        renderRegion(framebuffer.getDirtyRect());
+        framebuffer.flush();
     }
 }
