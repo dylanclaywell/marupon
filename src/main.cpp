@@ -18,6 +18,147 @@ static constexpr int FB_HEIGHT = 412;
 static uint16_t *framebuffer = nullptr; // Points into PSRAM once framebufferInit() has run.
 static esp_panel::drivers::LCD *lcd = nullptr;
 
+static constexpr uint16_t background = panelColor(0, 0, 64);
+
+static int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
+static int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
+
+struct Rect
+{
+    int x;
+    int y;
+    int w;
+    int h;
+};
+
+class NullableRect
+{
+private:
+    Rect _rect = Rect{0, 0, 0, 0};
+
+public:
+    NullableRect() = default;
+
+    NullableRect(const Rect &rect) : _rect(rect) {}
+
+    void clear()
+    {
+        _rect = Rect{0, 0, 0, 0};
+    }
+
+    bool isEmpty() const
+    {
+        return _rect.w <= 0 || _rect.h <= 0;
+    }
+
+    Rect getRect() const
+    {
+        return _rect;
+    }
+};
+
+static NullableRect dirtyRect;
+
+// Sets one pixel in the framebuffer. Pixels outside the buffer are ignored.
+static inline void setPixel(int x, int y, uint16_t color)
+{
+    if (x < 0 || x >= FB_WIDTH || y < 0 || y >= FB_HEIGHT)
+    {
+        return;
+    }
+    framebuffer[y * FB_WIDTH + x] = color;
+}
+
+static NullableRect rectUnion(const NullableRect &a, const NullableRect &b)
+{
+    Rect aRect = a.getRect();
+    Rect bRect = b.getRect();
+
+    if (a.isEmpty())
+    {
+        return b;
+    }
+    if (b.isEmpty())
+    {
+        return a;
+    }
+
+    int left = min(aRect.x, bRect.x);
+    int top = min(aRect.y, bRect.y);
+    int right = max(aRect.x + aRect.w, bRect.x + bRect.w);
+    int bottom = max(aRect.y + aRect.h, bRect.y + bRect.h);
+    return NullableRect(Rect{left, top, right - left, bottom - top});
+}
+
+static NullableRect rectIntersect(const NullableRect &a, const NullableRect &b)
+{
+    Rect aRect = a.getRect();
+    Rect bRect = b.getRect();
+
+    int left = max(aRect.x, bRect.x);
+    int top = max(aRect.y, bRect.y);
+    int right = min(aRect.x + aRect.w, bRect.x + bRect.w);
+    int bottom = min(aRect.y + aRect.h, bRect.y + bRect.h);
+    return NullableRect(Rect{left, top, right - left, bottom - top});
+}
+
+static void fillRectClipped(const NullableRect &region, uint16_t color)
+{
+    if (region.isEmpty())
+    {
+        return;
+    }
+
+    Rect rect = region.getRect();
+    for (int row = rect.y; row < rect.y + rect.h; row++)
+    {
+        for (int col = rect.x; col < rect.x + rect.w; col++)
+        {
+            setPixel(col, row, color);
+        }
+    }
+}
+
+static void drawSpriteClipped(int x, int y, int w, int h, const uint16_t *data, const NullableRect &region)
+{
+    NullableRect visible = rectIntersect(NullableRect(Rect{x, y, w, h}), region);
+    if (visible.isEmpty())
+    {
+        return;
+    }
+    Rect visibleRect = visible.getRect();
+    for (int row = visibleRect.y; row < visibleRect.y + visibleRect.h; row++)
+    {
+        for (int col = visibleRect.x; col < visibleRect.x + visibleRect.w; col++)
+        {
+            uint16_t color = data[(row - y) * w + (col - x)];
+            if (color != TRANSPARENT_COLOR)
+            {
+                setPixel(col, row, color);
+            }
+        }
+    }
+}
+
+static void markDirty(const Rect &r)
+{
+    if (dirtyRect.isEmpty())
+    {
+        dirtyRect = NullableRect(r);
+    }
+    else
+    {
+        dirtyRect = rectUnion(dirtyRect, NullableRect(r));
+    }
+}
+
+static void renderRegion(const NullableRect &region)
+{
+
+    fillRectClipped(region, background);
+    drawSpriteClipped(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, region);
+}
+
 enum ButtonState
 {
     BUTTON_RELEASED,
@@ -53,9 +194,6 @@ static constexpr int LINE_BUFFER_SIZE = 32;
 static char lineBuffer[LINE_BUFFER_SIZE];
 static int lineLength = 0;
 
-static int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
-static int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
-
 // Allocates the framebuffer in PSRAM. Called once at startup and never freed.
 // Returns false if there was not enough PSRAM.
 static bool framebufferInit()
@@ -63,16 +201,6 @@ static bool framebufferInit()
     size_t bytes = FB_WIDTH * FB_HEIGHT * sizeof(uint16_t);
     framebuffer = static_cast<uint16_t *>(ps_malloc(bytes));
     return framebuffer != nullptr;
-}
-
-// Sets one pixel in the framebuffer. Pixels outside the buffer are ignored.
-static inline void setPixel(int x, int y, uint16_t color)
-{
-    if (x < 0 || x >= FB_WIDTH || y < 0 || y >= FB_HEIGHT)
-    {
-        return;
-    }
-    framebuffer[y * FB_WIDTH + x] = color;
 }
 
 // Fills a rectangle in the framebuffer. Parts outside the buffer are skipped.
@@ -152,7 +280,6 @@ void setup()
 
     if (framebufferInit())
     {
-        const uint16_t background = panelColor(0, 0, 64);
         fillRect(0, 0, FB_WIDTH, FB_HEIGHT, background);
 
         flushFramebuffer();
@@ -165,12 +292,12 @@ void setup()
             delay(1000);
         }
     }
+
+    markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
 }
 
 void loop()
 {
-    flushFramebuffer();
-
     while (Serial.available() > 0)
     {
         char incomingByte = Serial.read();
@@ -214,12 +341,21 @@ void loop()
 
     if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
     {
+        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
         spriteY--;
+        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
     }
     if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
     {
+        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
         spriteY++;
+        markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
     }
 
-    drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data);
+    if (!dirtyRect.isEmpty())
+    {
+        renderRegion(dirtyRect);
+        flushFramebuffer();
+        dirtyRect.clear();
+    }
 }
