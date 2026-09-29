@@ -5,6 +5,14 @@
 
 using namespace esp_panel::board;
 
+static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
+{
+    uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    return __builtin_bswap16(rgb565);
+}
+
+static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
+
 static constexpr int FB_WIDTH = 412;
 static constexpr int FB_HEIGHT = 412;
 static uint16_t *framebuffer = nullptr; // Points into PSRAM once framebufferInit() has run.
@@ -12,8 +20,8 @@ static esp_panel::drivers::LCD *lcd = nullptr;
 
 enum ButtonState
 {
-    BUTTON_PRESSED,
-    BUTTON_RELEASED
+    BUTTON_RELEASED,
+    BUTTON_PRESSED
 };
 
 enum ButtonName
@@ -21,36 +29,32 @@ enum ButtonName
     BUTTON_A,
     BUTTON_B,
     BUTTON_UP,
-    BUTTON_DOWN
+    BUTTON_DOWN,
+
+    BUTTON_COUNT
 };
 
-ButtonState buttonStates[4] = {BUTTON_RELEASED, BUTTON_RELEASED, BUTTON_RELEASED, BUTTON_RELEASED};
+struct ButtonMapping
+{
+    const char *name;  // the text that arrives over serial, e.g. "UP"
+    ButtonName button; // the enum value it stands for, e.g. BUTTON_UP
+};
 
-static constexpr int SQ = 100;
-static uint16_t square[SQ * SQ]; // 20,000 bytes in internal RAM
+static constexpr ButtonMapping buttonMappings[] = {
+    {"A", BUTTON_A},
+    {"B", BUTTON_B},
+    {"UP", BUTTON_UP},
+    {"DOWN", BUTTON_DOWN}};
+static constexpr int BUTTON_MAPPING_COUNT = sizeof(buttonMappings) / sizeof(buttonMappings[0]);
 
-static char lineBuffer[32];
+static ButtonState buttonStates[BUTTON_COUNT] = {};
+
+static constexpr int LINE_BUFFER_SIZE = 32;
+static char lineBuffer[LINE_BUFFER_SIZE];
 static int lineLength = 0;
 
-int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
-int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
-
-static inline uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
-{
-    uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-    return __builtin_bswap16(rgb565);
-}
-
-// Fills the buffer with one colour and draws it. The -1 waits for the transfer to finish,
-// so it is safe to reuse the buffer on the next call.
-static void drawSquare(esp_panel::drivers::LCD *lcd, int x, int y, uint16_t color)
-{
-    for (int i = 0; i < SQ * SQ; i++)
-    {
-        square[i] = color;
-    }
-    lcd->drawBitmap(x, y, SQ, SQ, reinterpret_cast<const uint8_t *>(square), -1);
-}
+static int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
+static int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
 
 // Allocates the framebuffer in PSRAM. Called once at startup and never freed.
 // Returns false if there was not enough PSRAM.
@@ -58,11 +62,7 @@ static bool framebufferInit()
 {
     size_t bytes = FB_WIDTH * FB_HEIGHT * sizeof(uint16_t);
     framebuffer = static_cast<uint16_t *>(ps_malloc(bytes));
-    if (framebuffer == nullptr)
-    {
-        return false;
-    }
-    return true;
+    return framebuffer != nullptr;
 }
 
 // Sets one pixel in the framebuffer. Pixels outside the buffer are ignored.
@@ -87,7 +87,7 @@ static void fillRect(int x, int y, int w, int h, uint16_t color)
     }
 }
 
-static void drawSprite(int x, int y, int h, int w, const uint16_t *data)
+static void drawSprite(int x, int y, int w, int h, const uint16_t *data)
 {
     for (int row = 0; row < h; row++)
     {
@@ -96,41 +96,18 @@ static void drawSprite(int x, int y, int h, int w, const uint16_t *data)
             uint16_t color = data[row * w + col];
 
             // Skip magenta pixels
-            if (color == 0x1FF8)
+            if (color == TRANSPARENT_COLOR)
                 continue;
 
-            setPixel(x + col, y + row, data[row * w + col]);
+            setPixel(x + col, y + row, color);
         }
     }
-}
-
-// Draws a test image: a dark blue background, a white square outline, and a coloured marker in each
-// corner of the outline so a mirrored or rotated image is easy to spot.
-static void drawTestPattern()
-{
-    const uint16_t background = panelColor(0, 0, 64);
-    const uint16_t white = panelColor(255, 255, 255);
-
-    fillRect(0, 0, FB_WIDTH, FB_HEIGHT, background);
-
-    // The outline is inset 80 pixels so its corners stay inside the round screen.
-    const int inset = 80;
-    const int size = FB_WIDTH - 2 * inset;
-    fillRect(inset, inset, size, 2, white);            // top edge
-    fillRect(inset, inset + size - 2, size, 2, white); // bottom edge
-    fillRect(inset, inset, 2, size, white);            // left edge
-    fillRect(inset + size - 2, inset, 2, size, white); // right edge
-
-    fillRect(inset + 10, inset + 10, 30, 30, panelColor(255, 0, 0));                 // top left: red
-    fillRect(inset + size - 40, inset + 10, 30, 30, panelColor(0, 255, 0));          // top right: green
-    fillRect(inset + 10, inset + size - 40, 30, 30, panelColor(0, 0, 255));          // bottom left: blue
-    fillRect(inset + size - 40, inset + size - 40, 30, 30, panelColor(255, 255, 0)); // bottom right: yellow
 }
 
 static constexpr int STRIP_ROWS = FB_HEIGHT / 10; // An arbitrary strip height; we can measure other sizes.
 
 // Sends the whole framebuffer to the panel in horizontal strips. Returns false if any strip failed.
-static bool flushFramebuffer(esp_panel::drivers::LCD *lcd)
+static bool flushFramebuffer()
 {
     for (int y = 0; y < FB_HEIGHT; y += STRIP_ROWS)
     {
@@ -148,6 +125,19 @@ static bool flushFramebuffer(esp_panel::drivers::LCD *lcd)
     return true;
 }
 
+static bool findButton(const char *name, ButtonName &out)
+{
+    for (int i = 0; i < BUTTON_MAPPING_COUNT; i++)
+    {
+        if (strcmp(name, buttonMappings[i].name) == 0)
+        {
+            out = buttonMappings[i].button;
+            return true;
+        }
+    }
+    return false;
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -155,24 +145,21 @@ void setup()
 
     Board *board = new Board();
     board->init();
-    assert(board->begin());
+    bool ok = board->begin();
+    assert(ok);
 
     lcd = board->getLCD();
 
     if (framebufferInit())
     {
-        drawSquare(lcd, 156, 156, panelColor(0, 255, 255)); // cyan: the framebuffer was allocated
+        const uint16_t background = panelColor(0, 0, 64);
+        fillRect(0, 0, FB_WIDTH, FB_HEIGHT, background);
 
-        drawTestPattern();
-        flushFramebuffer(lcd);
-        Serial.print("Pixel (0,0): 0x");
-        Serial.println(framebuffer[0], HEX);
-        Serial.print("Pixel (95,95): 0x");
-        Serial.println(framebuffer[95 * FB_WIDTH + 95], HEX);
+        flushFramebuffer();
     }
     else
     {
-        drawSquare(lcd, 156, 156, panelColor(255, 0, 255)); // magenta: allocation failed
+        Serial.println("Failed to initialize framebuffer.");
         while (true)
         {
             delay(1000);
@@ -182,9 +169,7 @@ void setup()
 
 void loop()
 {
-    unsigned long start = micros();
-    bool ok = flushFramebuffer(lcd);
-    unsigned long elapsed = micros() - start;
+    flushFramebuffer();
 
     while (Serial.available() > 0)
     {
@@ -200,21 +185,15 @@ void loop()
 
             if (fieldsParsed == 2)
             {
-                if (strcmp(buttonName, "UP") == 0)
+                ButtonName button;
+                if (findButton(buttonName, button))
                 {
-                    buttonStates[BUTTON_UP] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
+                    buttonStates[button] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
                 }
-                else if (strcmp(buttonName, "DOWN") == 0)
+                else
                 {
-                    buttonStates[BUTTON_DOWN] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
-                }
-                else if (strcmp(buttonName, "A") == 0)
-                {
-                    buttonStates[BUTTON_A] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
-                }
-                else if (strcmp(buttonName, "B") == 0)
-                {
-                    buttonStates[BUTTON_B] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
+                    Serial.print("Unknown button: ");
+                    Serial.println(buttonName);
                 }
             }
             else
@@ -225,23 +204,13 @@ void loop()
 
             lineLength = 0; // Start the next line from scratch.
         }
-        else if (lineLength < sizeof(lineBuffer) - 1) // Leave room for the '\0' above.
+        else if (lineLength < LINE_BUFFER_SIZE - 1) // Leave room for the '\0' above.
         {
             lineBuffer[lineLength] = incomingByte;
             lineLength++;
         }
         // else: buffer is full and this isn't a newline yet -- drop the byte.
     }
-
-    // Print the button states
-    Serial.print("UP: ");
-    Serial.print(buttonStates[BUTTON_UP] == BUTTON_PRESSED ? "PRESSED" : "RELEASED");
-    Serial.print(", DOWN: ");
-    Serial.print(buttonStates[BUTTON_DOWN] == BUTTON_PRESSED ? "PRESSED" : "RELEASED");
-    Serial.print(", A: ");
-    Serial.print(buttonStates[BUTTON_A] == BUTTON_PRESSED ? "PRESSED" : "RELEASED");
-    Serial.print(", B: ");
-    Serial.println(buttonStates[BUTTON_B] == BUTTON_PRESSED ? "PRESSED" : "RELEASED");
 
     if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
     {
@@ -252,5 +221,5 @@ void loop()
         spriteY++;
     }
 
-    drawSprite(spriteX, spriteY, SPRITE_BABY_HEIGHT, SPRITE_BABY_WIDTH, sprite_baby_data);
+    drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data);
 }
