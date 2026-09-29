@@ -162,7 +162,9 @@ public:
 
     void markDirty(const Rect &r)
     {
-        _dirtyRect = rectUnion(_dirtyRect, NullableRect(r));
+        // Clamp the dirty rect to the framebuffer dimensions
+        NullableRect visible = rectIntersect(r, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        _dirtyRect = rectUnion(_dirtyRect, visible);
     }
 
     void fillRect(const Rect &r, uint16_t color)
