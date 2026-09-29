@@ -7,6 +7,7 @@ import serial.tools.list_ports
 import serial
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import mimetypes
+import threading
 from pathlib import Path
 
 STATIC_DIR = Path(__file__).parent.resolve()
@@ -37,6 +38,17 @@ def choose_port():
 
     choice = input("Select a port: ")
     return candidates[int(choice)].device
+
+def read_from_board():
+    """Prints every line the board sends over serial. Runs in its own thread."""
+    while True:
+        try:
+            line = ser.readline()  # waits up to `timeout` seconds; returns b"" if nothing came
+        except serial.SerialException as e:
+            print(f"Serial read failed: {e}")
+            return
+        if line:
+            print(f"[board] {line.decode('utf-8', errors='replace').rstrip()}")
 
 class JsonHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -94,7 +106,10 @@ def run():
     serial_port = choose_port()
     global ser
     ser = serial.Serial(serial_port, BAUD_RATE, timeout=1)
-    
+
+    # daemon=True lets the program exit on Ctrl+C without waiting for this thread.
+    threading.Thread(target=read_from_board, daemon=True).start()
+
     server_address = ('', HTTP_PORT)
     httpd = HTTPServer(server_address, JsonHandler)
     print(f"Serving HTTP on port {HTTP_PORT}...")
