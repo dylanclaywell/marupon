@@ -18,6 +18,8 @@ static constexpr int FB_HEIGHT = 412;
 
 static constexpr uint16_t background = panelColor(0, 0, 64);
 
+static constexpr int STAGING_PIXELS = 20000;
+
 static int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
 static int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
 
@@ -120,7 +122,14 @@ static constexpr int LINE_BUFFER_SIZE = 32;
 static char lineBuffer[LINE_BUFFER_SIZE];
 static int lineLength = 0;
 
-static constexpr int STRIP_ROWS = FB_HEIGHT / 10; // An arbitrary strip height; we can measure other sizes.
+static Rect rectAlign4(const Rect &r)
+{
+    int left = r.x & ~3;
+    int top = r.y & ~3;
+    int right = (r.x + r.w + 3) & ~3;
+    int bottom = (r.y + r.h + 3) & ~3;
+    return Rect{left, top, right - left, bottom - top};
+}
 
 static bool findButton(const char *name, ButtonName &out)
 {
@@ -138,8 +147,9 @@ static bool findButton(const char *name, ButtonName &out)
 class Framebuffer
 {
 private:
-    uint16_t *_pixels = nullptr; // in PSRAM, allocated once by init()
-    NullableRect _dirtyRect;     // the changes not yet sent to the panel
+    uint16_t *_pixels = nullptr;       // in PSRAM, allocated once by init()
+    uint16_t _staging[STAGING_PIXELS]; // temporary buffer for sending rects to the LCD
+    NullableRect _dirtyRect;           // the changes not yet sent to the panel
     esp_panel::drivers::LCD *_lcd = nullptr;
 
     void setPixel(int x, int y, uint16_t color)
@@ -164,7 +174,7 @@ public:
     {
         // Clamp the dirty rect to the framebuffer dimensions
         NullableRect visible = rectIntersect(r, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
-        _dirtyRect = rectUnion(_dirtyRect, visible);
+        _dirtyRect = rectUnion(_dirtyRect, NullableRect(rectAlign4(visible.getRect())));
     }
 
     void fillRect(const Rect &r, uint16_t color)
@@ -227,17 +237,32 @@ public:
             return true;
         }
 
-        for (int y = 0; y < FB_HEIGHT; y += STRIP_ROWS)
+        Rect r = _dirtyRect.getRect();
+
+        if (r.w * r.h <= STAGING_PIXELS)
         {
-            int rows = FB_HEIGHT - y;
-            if (rows > STRIP_ROWS)
+            // Fits: pack the rect into _staging and send it in one call.
+            for (int row = 0; row < r.h; row++)
             {
-                rows = STRIP_ROWS;
+                memcpy(&_staging[row * r.w],
+                       &_pixels[(r.y + row) * FB_WIDTH + r.x],
+                       r.w * sizeof(uint16_t));
             }
-            const uint8_t *data = reinterpret_cast<const uint8_t *>(&_pixels[y * FB_WIDTH]);
-            if (!_lcd->drawBitmap(0, y, FB_WIDTH, rows, data, -1))
+            if (!_lcd->drawBitmap(r.x, r.y, r.w, r.h,
+                                  reinterpret_cast<const uint8_t *>(_staging), -1))
             {
                 return false;
+            }
+        }
+        else
+        {
+            for (int y = r.y; y < r.y + r.h; y++)
+            {
+                const uint8_t *data = reinterpret_cast<const uint8_t *>(&_pixels[y * FB_WIDTH + r.x]);
+                if (!_lcd->drawBitmap(r.x, y, r.w, 1, data, -1))
+                {
+                    return false;
+                }
             }
         }
 
