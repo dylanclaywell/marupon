@@ -61,10 +61,14 @@ output and describe what to look for instead of guessing.
   stored as-is shows blue, `__builtin_bswap16(0xF800)` shows red). Keep that swap in one colour helper
   so it is never written by hand. The panel also keeps its own copy of the picture across a reboot, so
   only changed rectangles need sending, and startup should push one full clear frame. Measured: a
-  full 412x412 frame sent from the PSRAM buffer in 40-row strips takes about 31 ms (about 11 MB/s)
-  with no DMA errors, so send only changed rectangles rather than the whole frame every time. Pass
-  `timeout_ms = -1` to `drawBitmap` unless the buffer is known to stay untouched until the DMA transfer
-  ends.
+  full 412x412 frame sent from the PSRAM buffer in 41-row strips (`FB_HEIGHT / 10` is integer
+  division) takes about 31 ms (about 11 MB/s) with no DMA errors, while a 100x100 rectangle packed
+  into a staging buffer and sent in one call takes about 1.8 ms, so send only changed rectangles
+  rather than the whole frame every time. Send each rectangle in one `drawBitmap` call: one call per
+  row was very slow and the sprite visibly sheared while moving. The window's `x` must be a multiple
+  of 4: the library logs `x_start(...) not aligned to 4` and the picture comes out offset (whether y
+  and height need it is untested; we snap all four). Pass `timeout_ms = -1` to `drawBitmap` unless
+  the buffer is known to stay untouched until the DMA transfer ends.
 - **LVGL is not thread-safe.** Any LVGL call outside the port's own task needs
   `lvgl_port_lock(-1)` / `lvgl_port_unlock()` (see `src/main.cpp`).
 - **Config headers in `src/`** (`lv_conf.h`, `esp_panel_*_conf.h`, `esp_utils_conf.h`) come from the

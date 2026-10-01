@@ -1,8 +1,7 @@
 # Roadmap
 
-Last updated: 2026-09-28. This file records where the project stands and what comes next. Task
-tracking proper lives in `docs/feature-backlog.md` (DrBacklog), which is still empty; the "Next"
-list below is the seed for it.
+Last updated: 2026-10-01. This file records where the project stands. Task tracking lives in
+`docs/feature-backlog.md` (DrBacklog), not here.
 
 ## Goal
 
@@ -23,9 +22,24 @@ Everything below was confirmed on the device by the owner, unless marked otherwi
 - **Pixel format:** RGB565 with the two bytes of each pixel swapped. `panelColor(r, g, b)` in
   `main.cpp` is the only place that swap happens.
 - **Framebuffer:** 412x412x2 = 339,488 bytes, allocated once in PSRAM at startup (`ps_malloc`, never
-  freed). The primitives so far are `setPixel` and `fillRect`.
-- **Sending it:** `flushFramebuffer()` sends the whole buffer in 40-row strips. A full frame takes
-  about 31 ms (about 11 MB/s), steady, with no DMA errors.
+  freed). It lives in a `Framebuffer` class in `main.cpp` that also owns the dirty rectangle (a
+  `NullableRect`) and the LCD pointer. Drawing primitives are `fillRect` and `drawSprite`, both
+  clipped to a region.
+- **Sending it:** `Framebuffer::flush()` sends only the dirty rectangle. A rect of up to
+  `STAGING_PIXELS` pixels (20,000, an arbitrary size) is copied into a packed `_staging` array and
+  sent in one `drawBitmap` call; a larger rect falls back to one call per row. The earlier full-frame
+  version (strips, despite the "40-row" in older notes the strip height was really 41, because
+  `FB_HEIGHT / 10` is integer division) took about 31 ms (about 11 MB/s), steady, with no DMA errors.
+- **Measured on the device:** a 100x100 update (the 96x96 sprite plus alignment and one pixel of
+  movement) takes about 1.8 ms to flush, steady between 1.80 and 1.82 ms. That is about 11 MB/s again,
+  so the cost is the amount of data on the link, not per-call overhead. This covers the memcpy and the
+  send together; the time spent in `renderRegion` has not been measured.
+- **One call per update matters.** The first version sent one `drawBitmap` per row. It was very slow
+  and the sprite visibly sheared while moving; the single-call staging version fixed both.
+- **The panel needs `x` aligned to 4.** Confirmed on the device: an unaligned `x_start` makes the
+  library log `x_start(158) not aligned to 4` and the picture comes out 2 pixels off. `rectAlign4`
+  snaps all four of x, y, w and h outward to multiples of 4 in `markDirty`. Whether y and height need
+  it is still open (see Unverified).
 - **The test pattern renders correctly:** dark blue background, white outline, and markers red
   top-left, green top-right, blue bottom-left, yellow bottom-right. So the panel's axes match the
   buffer and no mirror or swap flags are needed.
@@ -41,46 +55,30 @@ Everything below was confirmed on the device by the owner, unless marked otherwi
   non-blockingly into a fixed `char` line buffer, parses completed lines with `sscanf`, and updates a
   `buttonStates[]` array. UP/DOWN currently just nudge the sprite's Y position by one pixel per frame
   as a smoke test — no real pet behaviour is designed yet.
-- **The sprite move-test doesn't erase behind itself yet.** Each `loop()` call draws the sprite at its
-  current `spriteX`/`spriteY` without clearing the previous position first, so holding UP/DOWN
-  currently leaves a trail on screen. Expected: dirty-rectangle drawing (see Next) hasn't been built.
+- **Dirty-rectangle drawing works.** Moving the sprite marks its old and new bounds dirty
+  (`markDirty` clamps to the screen, snaps to 4, and merges into one rectangle with `rectUnion`);
+  `renderRegion()` then repairs the background and redraws the sprite inside that region, and
+  `flush()` sends just that rectangle. No trail, and no warbling. The scene logic (`renderRegion`)
+  stays outside the `Framebuffer` class because it knows what the scene contains. Only one dirty
+  rectangle is tracked; more than one is not built because nothing needs it yet.
+- **Serial output is visible while the input tool runs.** `simulate_input.py` now also prints every
+  line the board sends, prefixed with `[board]`, from a reader thread. Only one program can hold the
+  COM port, so the serial monitor cannot be open at the same time.
 
-`main.cpp` currently draws the test pattern once, then repeatedly sends the whole frame, reads any
-pending button input, and nudges the sprite. That loop is a measurement and a smoke test, not the
-final design.
+`main.cpp` clears the screen and draws the sprite once at startup. `loop()` then reads any pending
+button input, nudges the sprite on UP/DOWN, and renders and sends only the changed rectangle.
+Movement is one pixel per pass through `loop()`, so its speed depends on how fast the loop runs
+(see the backlog).
 
 All work is committed on `main`. Nothing has been pushed, and there is no remote yet.
 
 ## Next
 
-1. **Clean up and organize the input-handling code in `main.cpp`.** The line-buffer reading, `sscanf`
-   parsing and `buttonStates[]` updates in `loop()` were built incrementally and work, but landed as
-   one long block; give them structure before building more on top.
-2. **Dirty-rectangle drawing.** Decide how sprite movement tracks and redraws only the changed area,
-   instead of leaving a trail behind the sprite every frame. This folds in the old `flushRect(x, y, w,
-   h)` idea: measure how long a small rectangle takes to send compared with the 31 ms full frame, and
-   keep x, y, width and height multiples of 4 until we know whether the panel needs that.
-3. **Startup clear.** Push one full clear frame at boot, because the panel keeps its old picture
-   across reboots.
-4. **The pet itself:** states, animation timing, and what button input does. Nothing beyond nudging
-   the sprite up/down as a smoke test is designed yet.
-5. **Touch.** Still switched off (`ESP_PANEL_BOARD_USE_TOUCH (0)`) and now lower priority: the current
-   input model is the named buttons (UP/DOWN/A/B) above, simulated from the laptop over serial rather
-   than real touch coordinates. See the unverified values below if touch gets picked back up later.
-6. **Remove LVGL** once nothing needs it: `lvgl` in `lib_deps`, the LVGL flags in `platformio.ini`,
-   `src/lv_conf.h`, `src/lvgl_v8_port.cpp` and `src/lvgl_v8_port.h`.
+What comes next, including cleanup and open design decisions (integer scaling, indexed sprites for
+palette swaps, a fixed timestep), is tracked in `docs/feature-backlog.md`, not here.
 
-## Cleanup, when convenient
+## Notes
 
-- `platformio.ini` still has the unused Espressif envs, and `boards/` still has their JSON files.
-  Building any of them for this board fails with "Multiple boards enabled" (see `CLAUDE.md`).
-- `boards/BOARD_CUSTOM.json` was copied from an Espressif board. Its `name` and `url` fields are
-  leftovers and do not affect the build.
-- The build prints "file version is outdated" warnings for `src/esp_panel_drivers_conf.h` and
-  `src/esp_panel_board_supported_conf.h`. They are harmless; the fix is to refresh those files from
-  the library's current templates.
-- `SQ`, `square` and `drawSquare` in `main.cpp` are left over from the byte-order experiment and
-  are only used for the startup cyan square.
 - `.vscode/` is mostly gitignored. Only `extensions.json` is tracked.
 
 ## Unverified
@@ -89,8 +87,9 @@ All work is committed on `main`. Nothing has been pushed, and there is no remote
   SPD2010, I2C address `0x53`, interrupt on GPIO 4, reset on expander pin EXIO1. The library counts
   expander pins from 0, so EXIO1 is probably index 0, but check it (the LCD reset on EXIO2 worked as
   index 1).
-- **Whether the panel needs 4-pixel alignment** for partial updates. The ESPHome notes suggest it;
-  all our transfers so far were multiples of 4.
+- **Whether y and height need 4-pixel alignment.** Only the `x_start` warning has been seen. The
+  old full-frame strips started at `y = 41, 82, ...` and showed no problem, so probably only x and
+  width matter, but that has not been tested.
 - **About 451 KiB of PSRAM is already taken** before our allocation (the buffer landed at
   `0x3C070DC8`). We don't know what uses it. Not a problem now (about 7.5 MB free).
 - **QSPI SPI mode `0`** and **backlight on GPIO 5** work, but the mode-`0` choice was a library
@@ -103,6 +102,7 @@ All work is committed on `main`. Nothing has been pushed, and there is no remote
 - Read `CLAUDE.md` first. Key rules: propose changes and wait for a yes, never flash or open the
   monitor, ask "OK to commit?" for every commit, never push.
 - Simulated input (no physical buttons needed): `uv run tools/simulate_input/simulate_input.py`, then
-  open `http://localhost:8000` in a browser. Arrow keys move UP/DOWN, `j`/`k` are A/B.
-- Values not yet measured (frame times with partial rectangles, PSRAM headroom under a real workload)
+  open `http://localhost:8000` in a browser. Arrow keys move UP/DOWN, `j`/`k` are A/B. The tool also
+  prints everything the board sends back, prefixed with `[board]`, so use it instead of the serial monitor.
+- Values not yet measured (time spent in `renderRegion`, PSRAM headroom under a real workload)
   should be measured on the device, not assumed.
