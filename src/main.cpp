@@ -16,6 +16,8 @@ static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
 static constexpr int FB_WIDTH = 412;
 static constexpr int FB_HEIGHT = 412;
 
+static constexpr int TICK_MS = 16; // approximately 60 FPS
+
 static constexpr uint16_t background = panelColor(0, 0, 64);
 
 static constexpr int STAGING_PIXELS = 20000;
@@ -121,6 +123,11 @@ static ButtonState buttonStates[BUTTON_COUNT] = {};
 static constexpr int LINE_BUFFER_SIZE = 32;
 static char lineBuffer[LINE_BUFFER_SIZE];
 static int lineLength = 0;
+
+static unsigned long lastFpsPrint = 0;
+static unsigned long lastTick = 0;
+static int frameCount = 0; // flushes sent to the panel
+static int tickCount = 0;  // game ticks run
 
 static Rect rectAlign4(const Rect &r)
 {
@@ -280,6 +287,24 @@ static void renderRegion(const Rect &region)
     framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, region);
 }
 
+static void process()
+{
+    if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
+    {
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        spriteY--;
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+    }
+    if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
+    {
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        spriteY++;
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+    }
+
+    tickCount++;
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -307,10 +332,14 @@ void setup()
             delay(1000);
         }
     }
+
+    lastTick = millis();
 }
 
 void loop()
 {
+    unsigned long now = millis();
+
     while (Serial.available() > 0)
     {
         char incomingByte = Serial.read();
@@ -352,22 +381,28 @@ void loop()
         // else: buffer is full and this isn't a newline yet -- drop the byte.
     }
 
-    if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
+    if (now - lastTick >= TICK_MS)
     {
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
-        spriteY--;
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
-    }
-    if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
-    {
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
-        spriteY++;
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        // Instead of setting lastTick to now, we increment it by TICK_MS to maintain a consistent tick rate.
+        // Basically this evens out the tick intervals, preventing drift over time and runs for as long as it needs to catch up (over several loop iterations)
+        // The alternative is lastTick = now; which could cause drift over time or skip ticks if the loop takes longer than TICK_MS.
+        lastTick += TICK_MS;
+        process();
     }
 
     if (framebuffer.isDirty())
     {
         renderRegion(framebuffer.getDirtyRect());
         framebuffer.flush();
+        frameCount++;
+    }
+
+    // print FPS every second instead of every frame
+    if (now - lastFpsPrint >= 1000)
+    {
+        Serial.printf("ticks/s: %d  frames/s: %d\n", tickCount, frameCount);
+        tickCount = 0;
+        frameCount = 0;
+        lastFpsPrint = now;
     }
 }
