@@ -133,4 +133,7 @@ screen or in the serial output. Claude can only vouch for the first half, so say
   framebuffer, made once at startup and never freed. Exported sprite data is `const` and lives in
   flash; copy it into the RAM framebuffer with our own code rather than handing flash addresses to the
   display's DMA.
-- Task tracking lives in `docs/feature-backlog.md` (DrBacklog), not in this file.
+- Task tracking lives in `docs/feature-backlog.md` (DrBacklog), not in this file. Normally never edit
+  that file by hand: change it only through the `drbacklog` tools (tasks, statuses and epics), because
+  they regenerate the file and drop anything they don't recognise. Hand-editing needs the owner's
+  explicit say-so for that one change.
