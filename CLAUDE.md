@@ -3,7 +3,7 @@
 Firmware for the **Waveshare ESP32-S3-Touch-LCD-1.46** board (412x412 SPD2010 QSPI panel, 16 MB flash,
 8 MB PSRAM): PlatformIO + Arduino framework, display and touch through Espressif's `ESP32_Display_Panel`
 library. The project is a virtual pet that will draw into its own framebuffer in PSRAM and push it to
-the panel (sprites, blitting), so LVGL v8.4 is only a temporary smoke test and is planned to be removed.
+the panel (sprites, blitting), without a UI library such as LVGL.
 The project is young: `src/main.cpp` is still the stock "Hello World" example, and there are no tests,
 CI or README yet. Add conventions to this file as they are established, not ahead of the code.
 
@@ -29,13 +29,12 @@ output and describe what to look for instead of guessing.
 
 ## Build setup (things that will bite)
 
-- **`default_envs` in `platformio.ini` is `BOARD_CUSTOM`.** The VS Code build button and a bare
-  `pio run` build only that env. Still pass `-e <env>` in commands so the target is explicit.
-  (If `default_envs` is ever empty, PlatformIO builds every env in the file.)
+- **`BOARD_CUSTOM` is the only env in `platformio.ini`.** It is also `default_envs`, so the VS Code
+  build button and a bare `pio run` build it. Still pass `-e BOARD_CUSTOM` in commands so the target is explicit.
 - **The 1.46 board has no preset in `ESP32_Display_Panel` 1.0.5**, so it uses the custom route: env
-  `BOARD_CUSTOM` plus `src/esp_panel_board_custom_conf.h`. The Espressif envs each add their own
-  `-DBOARD_...` flag, and combining one with a board selected in `src/esp_panel_board_supported_conf.h`
-  fails with "Multiple boards enabled". Don't build the Espressif envs for this board.
+  `BOARD_CUSTOM` plus `src/esp_panel_board_custom_conf.h`. Do not add a `-DBOARD_...` flag to the env:
+  combined with a board selected in `src/esp_panel_board_supported_conf.h` it fails with
+  "Multiple boards enabled".
 - **Board reference:** Waveshare wiki https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.46 and example
   repo https://github.com/waveshareteam/ESP32-S3-Touch-LCD-1.46 (Arduino core 3.1.1, its own drivers,
   not `ESP32_Display_Panel`). It lists I2C on GPIO 10 (SCL) and 11 (SDA), the TCA9554 IO expander at
@@ -51,12 +50,6 @@ output and describe what to look for instead of guessing.
   `espressif32` platform did not support Arduino 3.1.x when this was set up. Don't "fix" it back to the official platform.
 - **`framework-arduinoespressif32-libs` is the `-h` (high performance) build** on purpose: it avoids
   the ESP32-S3 RGB LCD screen drift. Don't swap it for the default libs.
-- **`LV_COLOR_16_SWAP` depends on the panel type:** `1` for SPI/QSPI LCDs, `0` for RGB/MIPI LCDs
-  (`[spi_qspi_lcd]` and `[rgb_mipi_lcd]` in `platformio.ini`). Wrong values give swapped colours.
-  This board is QSPI and needs `1`, which `[env:BOARD_CUSTOM]` sets through `${spi_qspi_lcd.build_flags}`
-  (confirmed on the device: with it unset, dark text rendered greenish). The flag only matters while
-  LVGL is in the project; afterwards the panel still wants the two bytes of each pixel swapped, and
-  that is ours to handle in our own framebuffer.
 - **Raw `LCD::drawBitmap()` pixels must be byte-swapped RGB565** (confirmed on the device: `0xF800`
   stored as-is shows blue, `__builtin_bswap16(0xF800)` shows red). Keep that swap in one colour helper
   so it is never written by hand. The panel also keeps its own copy of the picture across a reboot, so
@@ -69,9 +62,7 @@ output and describe what to look for instead of guessing.
   of 4: the library logs `x_start(...) not aligned to 4` and the picture comes out offset (whether y
   and height need it is untested; we snap all four). Pass `timeout_ms = -1` to `drawBitmap` unless
   the buffer is known to stay untouched until the DMA transfer ends.
-- **LVGL is not thread-safe.** Any LVGL call outside the port's own task needs
-  `lvgl_port_lock(-1)` / `lvgl_port_unlock()` (see `src/main.cpp`).
-- **Config headers in `src/`** (`lv_conf.h`, `esp_panel_*_conf.h`, `esp_utils_conf.h`) come from the
+- **Config headers in `src/`** (`esp_panel_*_conf.h`, `esp_utils_conf.h`) come from the
   library templates. Change values there deliberately and explain the change; don't reformat them.
   The exception is `src/esp_panel_board_custom_conf.h`: it is a small hand-written file, not the
   library's full template. It configures only the LCD (SPD2010 over QSPI), the PWM backlight and the
