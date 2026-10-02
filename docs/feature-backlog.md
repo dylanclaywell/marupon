@@ -1,7 +1,6 @@
 # DrBacklog
 
 ## TODO
-- [ ] [#1: Decouple game logic and movement from loop speed (fixed timestep)](#task-1)
 - [ ] [#2: Give the serial input handling in loop() some structure](#task-2)
 - [ ] [#3: Design the pet: states, animation timing, and what button input does](#task-3)
 - [ ] [#4: Re-enable touch input (low priority)](#task-4)
@@ -57,6 +56,7 @@
 - [ ] [#54: Pixel font and text rendering](#task-54)
 
 ## DONE
+- [x] [#1: Decouple game logic and movement from loop speed (fixed timestep)](#task-1)
 
 ## CLOSED
 
@@ -66,7 +66,7 @@
 
 <a id="task-1"></a>
 ### #1: Decouple game logic and movement from loop speed (fixed timestep)
-* **Status:** TODO
+* **Status:** DONE
 * **Created:** 2026-10-01
 * **Description:** Sprite movement is currently one pixel per pass through loop(), so its speed depends on how fast the loop runs; the flush optimisation made the sprite visibly faster. Run the game logic on a fixed tick instead (for example a millis() check every TICK_MS; the interval is arbitrary, tune it by feel) so speed no longer changes when the code gets faster or slower. Keep serial input reading on every pass and keep rendering "only when dirty"; use a non-blocking time check, not delay(), so input is not stalled. Decide whether missed ticks catch up (lastTick += TICK_MS) or are dropped (lastTick = now). Animation frames can count ticks rather than use a separate timer. Delta-time movement (speed * dt, needs sub-pixel positions) is the alternative if smoother motion is ever needed. Touches the input and movement code in main.cpp, so plan it as its own slice.
 
