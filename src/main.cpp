@@ -12,6 +12,7 @@ static constexpr int TE_TIMEOUT = 25; // Timeout for waiting for the next TE pul
 static int teTimeoutCount = 0;        // How many times the TE pulse wait has timed out
 
 static unsigned long maxBitmapSendMicros = 0;
+static unsigned long maxExpansionMicros = 0;
 
 static void IRAM_ATTR onTePulse()
 {
@@ -302,6 +303,7 @@ public:
                 rowsThisBand = rowsLeft; // Use the remaining rows if fewer than a full band
             }
 
+            unsigned long expansionStartMicros = micros();
             for (int row = 0; row < rowsThisBand; row++)
             {
                 int canvasRow = canvasRect.y + bandStartRow + row;
@@ -321,6 +323,12 @@ public:
                 {
                     memcpy(&destRow[rowRepeat * panelRect.w], &destRow[0], canvasRect.w * SCALE * sizeof(uint16_t));
                 }
+            }
+            unsigned long expansionEndMicros = micros();
+            unsigned long expansionMicros = expansionEndMicros - expansionStartMicros;
+            if (expansionMicros > maxExpansionMicros)
+            {
+                maxExpansionMicros = expansionMicros;
             }
 
             // Wait for the next TE pulse before drawing the next band (if using TE synchronization).
@@ -478,9 +486,10 @@ void loop()
         frameCount = 0;
         lastFpsPrint = now;
 
-        Serial.printf("te/s: %lu; teTimeouts: %d; maxBitmapSendMicros: %lu\n", tePulseCount, teTimeoutCount, maxBitmapSendMicros);
+        Serial.printf("te/s: %lu; teTimeouts: %d; maxBitmapSendMicros: %lu; maxExpansionMicros: %lu;\n", tePulseCount, teTimeoutCount, maxBitmapSendMicros, maxExpansionMicros);
         tePulseCount = 0;
         teTimeoutCount = 0;
         maxBitmapSendMicros = 0;
+        maxExpansionMicros = 0;
     }
 }
