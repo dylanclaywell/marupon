@@ -15,11 +15,13 @@ and debugging of the owner's own code, not delegated implementation.
 - **Teach and advise by default.** Explain what a piece of code does and why, point at the relevant
   lines, and suggest the change. Plain English; define a term the first time it appears.
 - **Never change anything without asking first.** That covers editing files, installing libraries,
-  changing `platformio.ini`, and running builds that write to the tree. Propose the change, wait for a yes.
+  and changing `platformio.ini`. Propose the change, wait for a yes.
 - **Debug the owner's code, don't rewrite it.** Find the cause, explain it, and offer the smallest fix.
 - **Never flash the device or open the serial monitor.** No `pio run -t upload`, no
   `pio device monitor`, no `esptool`. The owner does that. Ask them to paste the serial output.
-  Building (`pio run -e ...`) is fine once approved.
+- **Never run builds, and never ask to.** The owner builds and uploads from VS Code themselves. After a
+  change, say it is ready for them to build; if the build fails they will paste the output. Don't offer
+  `pio run`, even for a "does it compile?" check.
 
 ## The constraint that shapes everything
 
@@ -41,7 +43,7 @@ output and describe what to look for instead of guessing.
   `0x20`, touch at `0x53` with interrupt on GPIO 4, and QSPI display pins 21 (CS), 40 (SCK) and
   46/45/42/41 (data). Re-check against the wiki before relying on a pin.
 - **`Serial` goes over USB.** `boards/BOARD_CUSTOM.json` was copied from Espressif's EV board (its
-  `name` and `url` fields are leftovers). It sets `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial` reaches the
+  `name`, `url` and `vendor` now describe this board). It sets `-DARDUINO_USB_CDC_ON_BOOT=1` so `Serial` reaches the
   USB-C monitor; with `0`, `Serial` went to unconnected UART pins while the library's own logs still
   appeared. The USB port drops and reappears on every reset, so `setup()` starts with a 5 s `delay`
   (an arbitrary value; 2 s was too short on the owner's machine; raise it if early lines are missed). PSRAM allocation of the 412x412
@@ -73,11 +75,12 @@ output and describe what to look for instead of guessing.
 
 ## Commands
 
-From `platformio.ini`; every one needs an env name (`<env>`), and the owner runs flashing:
+From `platformio.ini`; every one needs an env name (`<env>`). The owner runs all of them, usually
+through the VS Code buttons:
 
 ```
-pio run -e <env>                 # build only (Claude may run, after approval)
-pio run -e <env> -t clean        # clean build output
+pio run -e <env>                 # build  -- OWNER ONLY
+pio run -e <env> -t clean        # clean build output  -- OWNER ONLY
 pio run -e <env> -t upload       # flash  -- OWNER ONLY
 pio device monitor -b 115200     # serial monitor  -- OWNER ONLY (monitor_speed = 115200)
 ```
@@ -118,8 +121,8 @@ pio device monitor -b 115200     # serial monitor  -- OWNER ONLY (monitor_speed 
 ## Verification
 
 No test framework is configured (`test/` holds only the PlatformIO placeholder). "Verified" means:
-`pio run -e <env>` builds cleanly, and the owner flashes the board and confirms the behaviour on
-screen or in the serial output. Claude can only vouch for the first half, so say so.
+the owner builds cleanly, flashes the board and confirms the behaviour on screen or in the serial
+output. Claude runs neither step, so never claim a change builds or works until the owner says so.
 
 ## Conventions
 
