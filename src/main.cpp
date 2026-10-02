@@ -1,9 +1,22 @@
 #include <Arduino.h>
 #include <esp_display_panel.hpp>
 
-#include <sprites/sprite_baby.h>
+#include <sprites/sprite_baby_cactus_32x32_1.h>
 
 using namespace esp_panel::board;
+
+static constexpr int TE_PIN = 18; // Per the Waveshare wiki, this is the pin for the Tearing Effect signal
+
+static volatile uint32_t tePulseCount = 0;
+static constexpr int TE_TIMEOUT = 25; // Timeout for waiting for the next TE pulse, in milliseconds. This is used to prevent indefinite blocking if a TE pulse is missed
+static int teTimeoutCount = 0;        // How many times the TE pulse wait has timed out
+
+static unsigned long maxBitmapSendMicros = 0;
+
+static void IRAM_ATTR onTePulse()
+{
+    tePulseCount++;
+}
 
 static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -13,7 +26,7 @@ static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
 
 static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
 
-static constexpr int SCALE = 1;
+static constexpr int SCALE = 4;
 static_assert(4 % SCALE == 0, "SCALE must evenly divide 4");
 
 static constexpr int ALIGN = 4 / SCALE; // The panel wants alignment to multiples of 4 pixels, and we adjust for the current scale
@@ -34,8 +47,8 @@ static constexpr int STAGING_PIXELS = 20000;
 
 static_assert(PANEL_WIDTH * SCALE <= STAGING_PIXELS, "One expanded canvas row must fit in staging");
 
-static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
-static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
+static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_CACTUS_32X32_1_WIDTH / 2;
+static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_CACTUS_32X32_1_HEIGHT / 2;
 
 struct Rect
 {
@@ -162,6 +175,20 @@ static bool findButton(const char *name, ButtonName &out)
         }
     }
     return false;
+}
+
+static void waitForTePulse()
+{
+    int startPulseCount = tePulseCount;
+    unsigned long startTime = millis();
+    while (tePulseCount == startPulseCount)
+    {
+        if (millis() - startTime >= TE_TIMEOUT)
+        {
+            teTimeoutCount++;
+            break; // Timeout reached, exit the wait loop
+        }
+    }
 }
 
 class Framebuffer
@@ -296,10 +323,24 @@ public:
                 }
             }
 
+            // Wait for the next TE pulse before drawing the next band (if using TE synchronization).
+            // We only wait for the TE pulse before drawing the first band. Subsequent bands are drawn immediately.
+            if (bandStartRow == 0)
+            {
+                waitForTePulse();
+            }
+
+            unsigned long startMicros = micros();
             if (!_lcd->drawBitmap(panelRect.x, panelRect.y + (bandStartRow * SCALE), panelRect.w, rowsThisBand * SCALE,
                                   reinterpret_cast<const uint8_t *>(_panelStaging), -1))
             {
                 return false;
+            }
+            unsigned long endMicros = micros();
+            unsigned long bitmapSendMicros = endMicros - startMicros;
+            if (bitmapSendMicros > maxBitmapSendMicros)
+            {
+                maxBitmapSendMicros = bitmapSendMicros;
             }
         }
 
@@ -314,22 +355,22 @@ static Framebuffer framebuffer;
 static void renderRegion(const Rect &region)
 {
     framebuffer.fillRect(region, background);
-    framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, region);
+    framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT, sprite_baby_cactus_32x32_1_data, region);
 }
 
 static void process()
 {
     if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
     {
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
         spriteY--;
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
     }
     if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
     {
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
         spriteY++;
-        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT});
+        framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
     }
 
     tickCount++;
@@ -351,7 +392,7 @@ void setup()
     {
         framebuffer.markDirty(Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
         framebuffer.fillRect(Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT}, background);
-        framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
+        framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT, sprite_baby_cactus_32x32_1_data, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
         framebuffer.flush();
     }
     else
@@ -362,6 +403,9 @@ void setup()
             delay(1000);
         }
     }
+
+    pinMode(TE_PIN, INPUT);
+    attachInterrupt(TE_PIN, onTePulse, RISING);
 
     lastTick = millis();
 }
@@ -430,9 +474,13 @@ void loop()
     // print FPS every second instead of every frame
     if (now - lastFpsPrint >= 1000)
     {
-        Serial.printf("ticks/s: %d  frames/s: %d\n", tickCount, frameCount);
         tickCount = 0;
         frameCount = 0;
         lastFpsPrint = now;
+
+        Serial.printf("te/s: %lu; teTimeouts: %d; maxBitmapSendMicros: %lu\n", tePulseCount, teTimeoutCount, maxBitmapSendMicros);
+        tePulseCount = 0;
+        teTimeoutCount = 0;
+        maxBitmapSendMicros = 0;
     }
 }
