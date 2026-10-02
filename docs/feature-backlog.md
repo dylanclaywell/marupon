@@ -4,7 +4,6 @@
 - [ ] [#2: Give the serial input handling in loop() some structure](#task-2)
 - [ ] [#3: Design the pet: states, animation timing, and what button input does](#task-3)
 - [ ] [#4: Re-enable touch input (low priority)](#task-4)
-- [ ] [#7: Tidy leftovers in BOARD_CUSTOM.json and the outdated config headers](#task-7)
 - [ ] [#8: Decide on integer scaling (small framebuffer, scale on send)](#task-8)
 - [ ] [#9: Indexed sprites with palettes (for pet colour variants)](#task-9)
 - [ ] [#10: markDirty: return early on an empty visible rect before aligning](#task-10)
@@ -57,6 +56,7 @@
 - [x] [#1: Decouple game logic and movement from loop speed (fixed timestep)](#task-1)
 - [x] [#5: Remove LVGL once nothing needs it](#task-5)
 - [x] [#6: Remove the unused Espressif envs and board JSON files](#task-6)
+- [x] [#7: Tidy leftovers in BOARD_CUSTOM.json and the outdated config headers](#task-7)
 
 ## CLOSED
 
@@ -104,9 +104,10 @@
 
 <a id="task-7"></a>
 ### #7: Tidy leftovers in BOARD_CUSTOM.json and the outdated config headers
-* **Status:** TODO
+* **Status:** DONE
 * **Created:** 2026-10-01
 * **Description:** boards/BOARD_CUSTOM.json was copied from an Espressif board; its name and url fields are leftovers and do not affect the build. The build also prints "file version is outdated" warnings for src/esp_panel_drivers_conf.h and src/esp_panel_board_supported_conf.h. They are harmless; the fix is to refresh those two files from the library's current templates, changing values deliberately and explaining any change, and keeping the supported-board flag at 0.
+* **Resolution:** Refreshed esp_panel_drivers_conf.h and esp_panel_board_supported_conf.h from the library templates (no values changed, supported-board flag still 0) and set BOARD_CUSTOM.json name, url and vendor for this board, in 045c9f7. Owner built and uploaded fine.
 
 <a id="task-8"></a>
 ### #8: Decide on integer scaling (small framebuffer, scale on send)
