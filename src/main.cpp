@@ -13,8 +13,15 @@ static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
 
 static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
 
-static constexpr int FB_WIDTH = 412;
-static constexpr int FB_HEIGHT = 412;
+static constexpr int PANEL_WIDTH = 412;
+static constexpr int PANEL_HEIGHT = 412;
+
+static constexpr int SCALE = 1;
+
+static constexpr int CANVAS_WIDTH = PANEL_WIDTH / SCALE;
+static constexpr int CANVAS_HEIGHT = PANEL_HEIGHT / SCALE;
+
+static_assert(PANEL_WIDTH % SCALE == 0 && PANEL_HEIGHT % SCALE == 0, "Panel dimensions must be divisible by SCALE");
 
 static constexpr int TICK_MS = 16; // approximately 60 FPS
 
@@ -22,8 +29,8 @@ static constexpr uint16_t background = panelColor(0, 0, 64);
 
 static constexpr int STAGING_PIXELS = 20000;
 
-static int spriteX = FB_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
-static int spriteY = FB_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
+static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
+static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
 
 struct Rect
 {
@@ -154,39 +161,39 @@ static bool findButton(const char *name, ButtonName &out)
 class Framebuffer
 {
 private:
-    uint16_t *_pixels = nullptr;       // in PSRAM, allocated once by init()
-    uint16_t _staging[STAGING_PIXELS]; // temporary buffer for sending rects to the LCD
-    NullableRect _dirtyRect;           // the changes not yet sent to the panel
+    uint16_t *_canvasPixels = nullptr;      // in PSRAM, allocated once by init()
+    uint16_t _panelStaging[STAGING_PIXELS]; // temporary buffer for sending rects to the LCD
+    NullableRect _dirtyRect;                // the changes not yet sent to the panel
     esp_panel::drivers::LCD *_lcd = nullptr;
 
     void setPixel(int x, int y, uint16_t color)
     {
-        if (x < 0 || x >= FB_WIDTH || y < 0 || y >= FB_HEIGHT)
+        if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT)
         {
             return;
         }
-        _pixels[y * FB_WIDTH + x] = color;
+        _canvasPixels[y * CANVAS_WIDTH + x] = color;
     }
 
 public:
     bool init(esp_panel::drivers::LCD *lcd)
     {
         _lcd = lcd;
-        size_t bytes = FB_WIDTH * FB_HEIGHT * sizeof(uint16_t);
-        _pixels = static_cast<uint16_t *>(ps_malloc(bytes));
-        return _pixels != nullptr;
+        size_t bytes = CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(uint16_t);
+        _canvasPixels = static_cast<uint16_t *>(ps_malloc(bytes));
+        return _canvasPixels != nullptr;
     }
 
     void markDirty(const Rect &r)
     {
         // Clamp the dirty rect to the framebuffer dimensions
-        NullableRect visible = rectIntersect(r, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        NullableRect visible = rectIntersect(r, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
         _dirtyRect = rectUnion(_dirtyRect, NullableRect(rectAlign4(visible.getRect())));
     }
 
     void fillRect(const Rect &r, uint16_t color)
     {
-        NullableRect visible = rectIntersect(r, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        NullableRect visible = rectIntersect(r, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
 
         if (visible.isEmpty())
         {
@@ -244,29 +251,43 @@ public:
             return true;
         }
 
-        Rect r = _dirtyRect.getRect();
+        Rect canvasRect = _dirtyRect.getRect();
+        Rect panelRect = Rect{canvasRect.x * SCALE, canvasRect.y * SCALE, canvasRect.w * SCALE, canvasRect.h * SCALE};
 
-        if (r.w * r.h <= STAGING_PIXELS)
+        if (panelRect.w * panelRect.h <= STAGING_PIXELS)
         {
-            // Fits: pack the rect into _staging and send it in one call.
-            for (int row = 0; row < r.h; row++)
+            // Fits: pack the rect into _panelStaging and send it in one call.
+            for (int canvasRow = 0; canvasRow < canvasRect.h; canvasRow++)
             {
-                memcpy(&_staging[row * r.w],
-                       &_pixels[(r.y + row) * FB_WIDTH + r.x],
-                       r.w * sizeof(uint16_t));
+                const uint16_t *srcRow = &_canvasPixels[(canvasRect.y + canvasRow) * CANVAS_WIDTH + canvasRect.x];
+                uint16_t *destRow = &_panelStaging[canvasRow * SCALE * panelRect.w];
+
+                for (int canvasCol = 0; canvasCol < canvasRect.w; canvasCol++)
+                {
+                    for (int colRepeat = 0; colRepeat < SCALE; colRepeat++)
+                    {
+                        destRow[canvasCol * SCALE + colRepeat] = srcRow[canvasCol];
+                    }
+                }
+
+                // Duplicate the first row SCALE-1 times to achieve vertical scaling (skipping the first row which is already copied)
+                for (int rowRepeat = 1; rowRepeat < SCALE; rowRepeat++)
+                {
+                    memcpy(&destRow[rowRepeat * panelRect.w], &destRow[0], canvasRect.w * SCALE * sizeof(uint16_t));
+                }
             }
-            if (!_lcd->drawBitmap(r.x, r.y, r.w, r.h,
-                                  reinterpret_cast<const uint8_t *>(_staging), -1))
+            if (!_lcd->drawBitmap(panelRect.x, panelRect.y, panelRect.w, panelRect.h,
+                                  reinterpret_cast<const uint8_t *>(_panelStaging), -1))
             {
                 return false;
             }
         }
         else
         {
-            for (int y = r.y; y < r.y + r.h; y++)
+            for (int y = canvasRect.y; y < canvasRect.y + canvasRect.h; y++)
             {
-                const uint8_t *data = reinterpret_cast<const uint8_t *>(&_pixels[y * FB_WIDTH + r.x]);
-                if (!_lcd->drawBitmap(r.x, y, r.w, 1, data, -1))
+                const uint8_t *data = reinterpret_cast<const uint8_t *>(&_canvasPixels[y * CANVAS_WIDTH + canvasRect.x]);
+                if (!_lcd->drawBitmap(canvasRect.x, y, canvasRect.w, 1, data, -1))
                 {
                     return false;
                 }
@@ -319,9 +340,9 @@ void setup()
 
     if (framebuffer.init(lcd))
     {
-        framebuffer.markDirty(Rect{0, 0, FB_WIDTH, FB_HEIGHT});
-        framebuffer.fillRect(Rect{0, 0, FB_WIDTH, FB_HEIGHT}, background);
-        framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, Rect{0, 0, FB_WIDTH, FB_HEIGHT});
+        framebuffer.markDirty(Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
+        framebuffer.fillRect(Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT}, background);
+        framebuffer.drawSprite(spriteX, spriteY, SPRITE_BABY_WIDTH, SPRITE_BABY_HEIGHT, sprite_baby_data, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
         framebuffer.flush();
     }
     else
