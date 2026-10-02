@@ -13,15 +13,18 @@ static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
 
 static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
 
+static constexpr int SCALE = 1;
+static_assert(4 % SCALE == 0, "SCALE must evenly divide 4");
+
+static constexpr int ALIGN = 4 / SCALE; // The panel wants alignment to multiples of 4 pixels, and we adjust for the current scale
+
 static constexpr int PANEL_WIDTH = 412;
 static constexpr int PANEL_HEIGHT = 412;
-
-static constexpr int SCALE = 1;
+static_assert(PANEL_WIDTH % SCALE == 0 && PANEL_HEIGHT % SCALE == 0, "Panel dimensions must be divisible by SCALE");
 
 static constexpr int CANVAS_WIDTH = PANEL_WIDTH / SCALE;
 static constexpr int CANVAS_HEIGHT = PANEL_HEIGHT / SCALE;
-
-static_assert(PANEL_WIDTH % SCALE == 0 && PANEL_HEIGHT % SCALE == 0, "Panel dimensions must be divisible by SCALE");
+static_assert(CANVAS_WIDTH % ALIGN == 0 && CANVAS_HEIGHT % ALIGN == 0, "Canvas dimensions must be divisible by ALIGN");
 
 static constexpr int TICK_MS = 16; // approximately 60 FPS
 
@@ -138,12 +141,13 @@ static unsigned long lastTick = 0;
 static int frameCount = 0; // flushes sent to the panel
 static int tickCount = 0;  // game ticks run
 
-static Rect rectAlign4(const Rect &r)
+static Rect rectAlignToPanel(const Rect &r)
 {
-    int left = r.x & ~3;
-    int top = r.y & ~3;
-    int right = (r.x + r.w + 3) & ~3;
-    int bottom = (r.y + r.h + 3) & ~3;
+    int mask = ALIGN - 1;
+    int left = r.x & ~mask;
+    int top = r.y & ~mask;
+    int right = (r.x + r.w + mask) & ~mask;
+    int bottom = (r.y + r.h + mask) & ~mask;
     return Rect{left, top, right - left, bottom - top};
 }
 
@@ -190,7 +194,7 @@ public:
     {
         // Clamp the dirty rect to the framebuffer dimensions
         NullableRect visible = rectIntersect(r, Rect{0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
-        _dirtyRect = rectUnion(_dirtyRect, NullableRect(rectAlign4(visible.getRect())));
+        _dirtyRect = rectUnion(_dirtyRect, NullableRect(rectAlignToPanel(visible.getRect())));
     }
 
     void fillRect(const Rect &r, uint16_t color)
