@@ -51,6 +51,7 @@
 - [ ] [#52: Decide pixel density using mockups on the real panel](#task-52)
 - [ ] [#53: Sprite pipeline for 14 designs times colors](#task-53)
 - [ ] [#54: Pixel font and text rendering](#task-54)
+- [ ] [#55: Sync panel updates to the TE pin to stop tearing and beat](#task-55)
 
 ## DONE
 - [x] [#1: Decouple game logic and movement from loop speed (fixed timestep)](#task-1)
@@ -435,6 +436,13 @@
 * **Epic:** #9
 * **Description:** Once LVGL is gone (#5) all text is ours. Readable text needs a minimum number of art pixels per letter and must share the one pixel density used by the rest of the screen.
 ---
+
+<a id="task-55"></a>
+### #55: Sync panel updates to the TE pin to stop tearing and beat
+* **Status:** TODO
+* **Created:** 2026-10-02
+* **Epic:** #9
+* **Description:** Moving the sprite showed row-by-row jumps in slow motion. Cause: the panel rescans its own copy of the picture at about 61 Hz (measured: the TE signal on GPIO 18 pulses about 61 times per second) while our writes landed at arbitrary moments, so a seam appeared; our 16 ms tick (about 62.5 Hz) also beats against the 61 Hz refresh. The library already turns TE on (default SPD2010 init table, 0x35 with 0x00) and does nothing with the pin. Owner writes the code. Slice 3a is DONE (ee56cf0): flush() waits for a TE pulse after expanding the first band and before sending it (25 ms timeout, first band only), so a sprite-sized update is sent right after the pulse. Confirmed on the device: no row-by-row jumps, te/s 61, 0 wait timeouts, longest drawBitmap about 2.7 to 2.8 ms (against a scan of about 16.4 ms). Slice 3b is TODO: run process() once per TE pulse instead of every 16 ms, falling back to the timer if pulses stop, to remove the beat (a hop about 1.5 times a second). Still unmeasured: the expansion time at 4x (maxExpandMicros) and whether the rising or falling TE edge is the better one. Known limit: a full-frame write (about 31 ms measured earlier) is longer than one scan and can still tear. Related to #8.
 
 ## Epics
 
