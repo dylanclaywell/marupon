@@ -29,6 +29,8 @@ static constexpr uint16_t background = panelColor(0, 0, 64);
 
 static constexpr int STAGING_PIXELS = 20000;
 
+static_assert(PANEL_WIDTH * SCALE <= STAGING_PIXELS, "One expanded canvas row must fit in staging");
+
 static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_WIDTH / 2;
 static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_HEIGHT / 2;
 
@@ -254,13 +256,26 @@ public:
         Rect canvasRect = _dirtyRect.getRect();
         Rect panelRect = Rect{canvasRect.x * SCALE, canvasRect.y * SCALE, canvasRect.w * SCALE, canvasRect.h * SCALE};
 
-        if (panelRect.w * panelRect.h <= STAGING_PIXELS)
+        int panelRowWidth = panelRect.w;   // pixels across one panel row
+        int panelRowsPerCanvasRow = SCALE; // each canvas row becomes this many panel rows
+        int stagingPixelsPerCanvasRow = panelRowWidth * panelRowsPerCanvasRow;
+
+        int maxRowsPerBand = STAGING_PIXELS / stagingPixelsPerCanvasRow;
+
+        for (int bandStartRow = 0; bandStartRow < canvasRect.h; bandStartRow += maxRowsPerBand)
         {
-            // Fits: pack the rect into _panelStaging and send it in one call.
-            for (int canvasRow = 0; canvasRow < canvasRect.h; canvasRow++)
+            int rowsLeft = canvasRect.h - bandStartRow;
+            int rowsThisBand = maxRowsPerBand; // Default to a full band
+            if (rowsLeft < maxRowsPerBand)
             {
-                const uint16_t *srcRow = &_canvasPixels[(canvasRect.y + canvasRow) * CANVAS_WIDTH + canvasRect.x];
-                uint16_t *destRow = &_panelStaging[canvasRow * SCALE * panelRect.w];
+                rowsThisBand = rowsLeft; // Use the remaining rows if fewer than a full band
+            }
+
+            for (int row = 0; row < rowsThisBand; row++)
+            {
+                int canvasRow = canvasRect.y + bandStartRow + row;
+                const uint16_t *srcRow = &_canvasPixels[canvasRow * CANVAS_WIDTH + canvasRect.x];
+                uint16_t *destRow = &_panelStaging[row * SCALE * panelRect.w];
 
                 for (int canvasCol = 0; canvasCol < canvasRect.w; canvasCol++)
                 {
@@ -276,21 +291,11 @@ public:
                     memcpy(&destRow[rowRepeat * panelRect.w], &destRow[0], canvasRect.w * SCALE * sizeof(uint16_t));
                 }
             }
-            if (!_lcd->drawBitmap(panelRect.x, panelRect.y, panelRect.w, panelRect.h,
+
+            if (!_lcd->drawBitmap(panelRect.x, panelRect.y + (bandStartRow * SCALE), panelRect.w, rowsThisBand * SCALE,
                                   reinterpret_cast<const uint8_t *>(_panelStaging), -1))
             {
                 return false;
-            }
-        }
-        else
-        {
-            for (int y = canvasRect.y; y < canvasRect.y + canvasRect.h; y++)
-            {
-                const uint8_t *data = reinterpret_cast<const uint8_t *>(&_canvasPixels[y * CANVAS_WIDTH + canvasRect.x]);
-                if (!_lcd->drawBitmap(canvasRect.x, y, canvasRect.w, 1, data, -1))
-                {
-                    return false;
-                }
             }
         }
 
