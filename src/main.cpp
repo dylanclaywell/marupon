@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <esp_display_panel.hpp>
 
-#include <sprites/sprite_baby_cactus_32x32_1.h>
+#include "sprites/sprite_baby_cactus_32x32_1.h"
+#include "geometry.h"
 
 using namespace esp_panel::board;
 
@@ -50,70 +51,6 @@ static_assert(PANEL_WIDTH * SCALE <= STAGING_PIXELS, "One expanded canvas row mu
 
 static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_CACTUS_32X32_1_WIDTH / 2;
 static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_CACTUS_32X32_1_HEIGHT / 2;
-
-struct Rect
-{
-    int x;
-    int y;
-    int w;
-    int h;
-};
-
-class NullableRect
-{
-private:
-    Rect _rect = Rect{0, 0, 0, 0};
-
-public:
-    NullableRect() = default;
-
-    NullableRect(const Rect &rect) : _rect(rect) {}
-
-    void clear()
-    {
-        _rect = Rect{0, 0, 0, 0};
-    }
-
-    bool isEmpty() const
-    {
-        return _rect.w <= 0 || _rect.h <= 0;
-    }
-
-    Rect getRect() const
-    {
-        return _rect;
-    }
-};
-
-static NullableRect rectUnion(const NullableRect &a, const NullableRect &b)
-{
-    Rect aRect = a.getRect();
-    Rect bRect = b.getRect();
-
-    if (a.isEmpty())
-    {
-        return b;
-    }
-    if (b.isEmpty())
-    {
-        return a;
-    }
-
-    int left = min(aRect.x, bRect.x);
-    int top = min(aRect.y, bRect.y);
-    int right = max(aRect.x + aRect.w, bRect.x + bRect.w);
-    int bottom = max(aRect.y + aRect.h, bRect.y + bRect.h);
-    return NullableRect(Rect{left, top, right - left, bottom - top});
-}
-
-static NullableRect rectIntersect(const Rect &a, const Rect &b)
-{
-    int left = max(a.x, b.x);
-    int top = max(a.y, b.y);
-    int right = min(a.x + a.w, b.x + b.w);
-    int bottom = min(a.y + a.h, b.y + b.h);
-    return NullableRect(Rect{left, top, right - left, bottom - top});
-}
 
 enum ButtonState
 {
