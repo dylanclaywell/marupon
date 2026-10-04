@@ -7,6 +7,7 @@
 #include "geometry.h"
 #include "panel_color.h"
 #include "te_sync.h"
+#include "buttons.h"
 
 using namespace esp_panel::board;
 
@@ -22,41 +23,6 @@ static_assert(PANEL_WIDTH * SCALE <= STAGING_PIXELS, "One expanded canvas row mu
 
 static int spriteX = CANVAS_WIDTH / 2 - SPRITE_BABY_CACTUS_32X32_1_WIDTH / 2;
 static int spriteY = CANVAS_HEIGHT / 2 - SPRITE_BABY_CACTUS_32X32_1_HEIGHT / 2;
-
-enum ButtonState
-{
-    BUTTON_RELEASED,
-    BUTTON_PRESSED
-};
-
-enum ButtonName
-{
-    BUTTON_A,
-    BUTTON_B,
-    BUTTON_UP,
-    BUTTON_DOWN,
-
-    BUTTON_COUNT
-};
-
-struct ButtonMapping
-{
-    const char *name;  // the text that arrives over serial, e.g. "UP"
-    ButtonName button; // the enum value it stands for, e.g. BUTTON_UP
-};
-
-static constexpr ButtonMapping buttonMappings[] = {
-    {"A", BUTTON_A},
-    {"B", BUTTON_B},
-    {"UP", BUTTON_UP},
-    {"DOWN", BUTTON_DOWN}};
-static constexpr int BUTTON_MAPPING_COUNT = sizeof(buttonMappings) / sizeof(buttonMappings[0]);
-
-static ButtonState buttonStates[BUTTON_COUNT] = {};
-
-static constexpr int LINE_BUFFER_SIZE = 32;
-static char lineBuffer[LINE_BUFFER_SIZE];
-static int lineLength = 0;
 
 static uint32_t lastTickPulseCount = 0;
 static uint32_t lastPrintedPulseCount = 0;
@@ -74,19 +40,6 @@ static Rect rectAlignToPanel(const Rect &r)
     int right = (r.x + r.w + mask) & ~mask;
     int bottom = (r.y + r.h + mask) & ~mask;
     return Rect{left, top, right - left, bottom - top};
-}
-
-static bool findButton(const char *name, ButtonName &out)
-{
-    for (int i = 0; i < BUTTON_MAPPING_COUNT; i++)
-    {
-        if (strcmp(name, buttonMappings[i].name) == 0)
-        {
-            out = buttonMappings[i].button;
-            return true;
-        }
-    }
-    return false;
 }
 
 class Framebuffer
@@ -265,13 +218,13 @@ static void renderRegion(const Rect &region)
 
 static void process()
 {
-    if (buttonStates[BUTTON_UP] == BUTTON_PRESSED)
+    if (getButtonState(BUTTON_UP) == BUTTON_PRESSED)
     {
         framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
         spriteY--;
         framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
     }
-    if (buttonStates[BUTTON_DOWN] == BUTTON_PRESSED)
+    if (getButtonState(BUTTON_DOWN) == BUTTON_PRESSED)
     {
         framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
         spriteY++;
@@ -314,46 +267,7 @@ void setup()
 
 void loop()
 {
-    while (Serial.available() > 0)
-    {
-        char incomingByte = Serial.read();
-
-        if (incomingByte == '\n')
-        {
-            lineBuffer[lineLength] = '\0'; // Turn the buffer into a proper C string.
-            char buttonName[16];
-            char buttonState[16];
-
-            int fieldsParsed = sscanf(lineBuffer, "BUTTON %15s %15s", buttonName, buttonState);
-
-            if (fieldsParsed == 2)
-            {
-                ButtonName button;
-                if (findButton(buttonName, button))
-                {
-                    buttonStates[button] = (strcmp(buttonState, "PRESSED") == 0) ? BUTTON_PRESSED : BUTTON_RELEASED;
-                }
-                else
-                {
-                    Serial.print("Unknown button: ");
-                    Serial.println(buttonName);
-                }
-            }
-            else
-            {
-                Serial.print("Could not parse line: ");
-                Serial.println(lineBuffer);
-            }
-
-            lineLength = 0; // Start the next line from scratch.
-        }
-        else if (lineLength < LINE_BUFFER_SIZE - 1) // Leave room for the '\0' above.
-        {
-            lineBuffer[lineLength] = incomingByte;
-            lineLength++;
-        }
-        // else: buffer is full and this isn't a newline yet -- drop the byte.
-    }
+    pollButtonsFromSerial();
 
     unsigned long now = millis();
     uint32_t currentPulseCount = getTePulseCount();
