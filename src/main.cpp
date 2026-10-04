@@ -8,7 +8,9 @@ using namespace esp_panel::board;
 static constexpr int TE_PIN = 18; // Per the Waveshare wiki, this is the pin for the Tearing Effect signal
 
 static volatile uint32_t tePulseCount = 0;
-static constexpr int TE_TIMEOUT = 25; // Timeout for waiting for the next TE pulse, in milliseconds. This is used to prevent indefinite blocking if a TE pulse is missed
+static uint32_t lastTickPulseCount = 0;
+static uint32_t lastPrintedPulseCount = 0;
+static constexpr int TE_TIMEOUT = 25; // Timeout for waiting for the next TE pulse, in milliseconds. This is used to prevent indefinite blocking if a TE pulse is missed, and also a fallback for slow or missing TE signals for updating the display
 static int teTimeoutCount = 0;        // How many times the TE pulse wait has timed out
 
 static unsigned long maxBitmapSendMicros = 0;
@@ -39,8 +41,6 @@ static_assert(PANEL_WIDTH % SCALE == 0 && PANEL_HEIGHT % SCALE == 0, "Panel dime
 static constexpr int CANVAS_WIDTH = PANEL_WIDTH / SCALE;
 static constexpr int CANVAS_HEIGHT = PANEL_HEIGHT / SCALE;
 static_assert(CANVAS_WIDTH % ALIGN == 0 && CANVAS_HEIGHT % ALIGN == 0, "Canvas dimensions must be divisible by ALIGN");
-
-static constexpr int TICK_MS = 16; // approximately 60 FPS
 
 static constexpr uint16_t background = panelColor(0, 0, 64);
 
@@ -152,8 +152,6 @@ static int lineLength = 0;
 
 static unsigned long lastFpsPrint = 0;
 static unsigned long lastTick = 0;
-static int frameCount = 0; // flushes sent to the panel
-static int tickCount = 0;  // game ticks run
 
 static Rect rectAlignToPanel(const Rect &r)
 {
@@ -180,7 +178,7 @@ static bool findButton(const char *name, ButtonName &out)
 
 static void waitForTePulse()
 {
-    int startPulseCount = tePulseCount;
+    uint32_t startPulseCount = tePulseCount;
     unsigned long startTime = millis();
     while (tePulseCount == startPulseCount)
     {
@@ -380,8 +378,6 @@ static void process()
         spriteY++;
         framebuffer.markDirty(Rect{spriteX, spriteY, SPRITE_BABY_CACTUS_32X32_1_WIDTH, SPRITE_BABY_CACTUS_32X32_1_HEIGHT});
     }
-
-    tickCount++;
 }
 
 void setup()
@@ -393,6 +389,9 @@ void setup()
     board->init();
     bool ok = board->begin();
     assert(ok);
+
+    pinMode(TE_PIN, INPUT);
+    attachInterrupt(TE_PIN, onTePulse, RISING);
 
     esp_panel::drivers::LCD *lcd = board->getLCD();
 
@@ -412,16 +411,11 @@ void setup()
         }
     }
 
-    pinMode(TE_PIN, INPUT);
-    attachInterrupt(TE_PIN, onTePulse, RISING);
-
     lastTick = millis();
 }
 
 void loop()
 {
-    unsigned long now = millis();
-
     while (Serial.available() > 0)
     {
         char incomingByte = Serial.read();
@@ -463,12 +457,12 @@ void loop()
         // else: buffer is full and this isn't a newline yet -- drop the byte.
     }
 
-    if (now - lastTick >= TICK_MS)
+    unsigned long now = millis();
+    uint32_t currentPulseCount = tePulseCount;
+    if (currentPulseCount != lastTickPulseCount || now - lastTick >= TE_TIMEOUT)
     {
-        // Instead of setting lastTick to now, we increment it by TICK_MS to maintain a consistent tick rate.
-        // Basically this evens out the tick intervals, preventing drift over time and runs for as long as it needs to catch up (over several loop iterations)
-        // The alternative is lastTick = now; which could cause drift over time or skip ticks if the loop takes longer than TICK_MS.
-        lastTick += TICK_MS;
+        lastTickPulseCount = currentPulseCount;
+        lastTick = now;
         process();
     }
 
@@ -476,18 +470,23 @@ void loop()
     {
         renderRegion(framebuffer.getDirtyRect());
         framebuffer.flush();
-        frameCount++;
     }
 
     // print FPS every second instead of every frame
     if (now - lastFpsPrint >= 1000)
     {
-        tickCount = 0;
-        frameCount = 0;
         lastFpsPrint = now;
 
-        Serial.printf("te/s: %lu; teTimeouts: %d; maxBitmapSendMicros: %lu; maxExpansionMicros: %lu;\n", tePulseCount, teTimeoutCount, maxBitmapSendMicros, maxExpansionMicros);
-        tePulseCount = 0;
+        uint32_t totalPulseCount = tePulseCount;
+        uint32_t pulsesThisSecond = totalPulseCount - lastPrintedPulseCount;
+        lastPrintedPulseCount = totalPulseCount;
+
+        Serial.printf(
+            "te/s: %lu; teTimeoutCount: %d; maxBitmapSendMicros: %lu; maxExpansionMicros: %lu;\n",
+            pulsesThisSecond,
+            teTimeoutCount,
+            maxBitmapSendMicros,
+            maxExpansionMicros);
         teTimeoutCount = 0;
         maxBitmapSendMicros = 0;
         maxExpansionMicros = 0;
