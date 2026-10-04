@@ -3,6 +3,7 @@
 
 #include "sprites/sprite_baby_cactus_32x32_1.h"
 #include "geometry.h"
+#include "panel_color.h"
 
 using namespace esp_panel::board;
 
@@ -20,12 +21,6 @@ static unsigned long maxExpansionMicros = 0;
 static void IRAM_ATTR onTePulse()
 {
     tePulseCount++;
-}
-
-static constexpr uint16_t panelColor(uint8_t r, uint8_t g, uint8_t b)
-{
-    uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-    return __builtin_bswap16(rgb565);
 }
 
 static constexpr uint16_t TRANSPARENT_COLOR = panelColor(255, 0, 255);
